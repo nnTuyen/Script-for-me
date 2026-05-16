@@ -1,0 +1,181 @@
+// ==UserScript==
+// @name         Google AI Studio | Clear Chat
+// @namespace    https://greasyfork.org/en/users/1462137-piknockyou
+// @version      2.6
+// @author       Nguyễn Ngọc Tuyên
+// @license      AGPL-3.0
+// @description  Xóa tất cả chat nhưng giữ lại 3 dòng đầu tiên.
+// @match        https://aistudio.google.com/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=aistudio.google.com
+// @grant        GM_addStyle
+// @run-at       document-idle
+// @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Clear-chat-Aistudio
+// @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Clear-chat-Aistudio
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    if (window.self !== window.top) return;
+    console.log("✅ [Clear Chat Script] v3.4 - Tooltip fix xuống dưới...");
+
+    const MESSAGES_TO_KEEP = 0;
+
+    // Selector quét nút Xóa gốc
+    const CHAT_TURN_OPTIONS_SELECTOR = 'ms-chat-turn-options button, ms-prompt-turn button[aria-label*="More"], button[aria-label="More options"], button.mat-mdc-menu-trigger';
+    const DELETE_BUTTON_MENU_SELECTOR = 'button[role="menuitem"], .mat-mdc-menu-item';
+
+    // 1. Tooltip (Đã sửa vị trí xuống dưới)
+    let gccTooltip = null;
+    function showTooltip(btn, text) {
+        if (!gccTooltip) {
+            gccTooltip = document.createElement('div');
+            gccTooltip.style.cssText = `
+                position: fixed;
+                background: #202124;
+                border: 1px solid #5f6368;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-family: Roboto, sans-serif;
+                font-size: 11px;
+                color: #e8eaed;
+                z-index: 10000; /* Tăng Z-index để đè lên mọi thứ */
+                pointer-events: none;
+                white-space: nowrap;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.5);
+                opacity: 0;
+                transition: opacity 0.1s;
+            `;
+            document.body.appendChild(gccTooltip);
+        }
+        gccTooltip.textContent = text;
+
+        // Tính toán vị trí
+        const rect = btn.getBoundingClientRect();
+        const tooltipWidth = gccTooltip.offsetWidth; // Lấy chiều rộng hiện tại (nếu đã render) hoặc ước lượng
+
+        // Căn giữa theo chiều ngang
+        gccTooltip.style.left = `${rect.left + rect.width / 2 - (gccTooltip.offsetWidth / 2)}px`;
+
+        // ĐẶT XUỐNG DƯỚI (Bottom của nút + 6px khoảng cách)
+        gccTooltip.style.top = `${rect.bottom + 6}px`;
+
+        gccTooltip.style.opacity = '1';
+    }
+
+    function hideTooltip() {
+        if (gccTooltip) gccTooltip.style.opacity = '0';
+    }
+
+    // 2. Logic xóa nhanh
+    async function deleteMessagesSequentially() {
+        let elements = Array.from(document.querySelectorAll(CHAT_TURN_OPTIONS_SELECTOR));
+        elements = elements.filter(el => el.closest('ms-chat-turn, ms-prompt-turn, .chat-turn, ms-chat-history'));
+
+        if (elements.length <= MESSAGES_TO_KEEP) {
+            const btn = document.getElementById('gemini-cleaner-button');
+            if(btn) {
+                // Rung nhẹ báo lỗi
+                btn.style.transform = 'translateX(2px)';
+                setTimeout(() => btn.style.transform = 'translateX(-2px)', 50);
+                setTimeout(() => btn.style.transform = 'none', 100);
+            }
+            return;
+        }
+
+        if (!confirm(`Xóa ${elements.length - MESSAGES_TO_KEEP} tin nhắn và GIỮ LẠI ${MESSAGES_TO_KEEP} câu đầu?`)) return;
+
+        for (let i = elements.length - 1; i >= MESSAGES_TO_KEEP; i--) {
+            try {
+                let currentElements = Array.from(document.querySelectorAll(CHAT_TURN_OPTIONS_SELECTOR))
+                                           .filter(el => el.closest('ms-chat-turn, ms-prompt-turn, .chat-turn, ms-chat-history'));
+                if (!currentElements[i]) continue;
+
+                currentElements[i].scrollIntoView({ block: 'center', behavior: 'auto' });
+                currentElements[i].click();
+                await new Promise(r => setTimeout(r, 50));
+
+                const menuButtons = document.querySelectorAll(DELETE_BUTTON_MENU_SELECTOR);
+                let deleted = false;
+                for (let btn of menuButtons) {
+                    const text = (btn.textContent || btn.innerText || '').toLowerCase();
+                    if (text.includes('delete') || text.includes('xóa')) {
+                        btn.click();
+                        deleted = true;
+                        break;
+                    }
+                }
+                if(deleted) await new Promise(r => setTimeout(r, 150));
+            } catch (err) { console.error(err); }
+        }
+    }
+
+    // 3. Hàm tạo nút
+    function createIndestructibleSVGButton() {
+        if (document.getElementById('gemini-cleaner-button')) return;
+
+        const buttons = Array.from(document.querySelectorAll('button'));
+
+        // Tìm nút dấu cộng (+)
+        const plusBtn = buttons.find(b => {
+            const text = (b.innerText || '').trim();
+            // Nút + thường chứa icon material tên là add_circle hoặc add
+            return text === 'add_circle' || text === 'add';
+        });
+
+        if (!plusBtn || !plusBtn.parentElement) return;
+
+        const targetContainer = plusBtn.parentElement;
+
+        const button = document.createElement('button');
+        button.id = 'gemini-cleaner-button';
+        button.type = 'button';
+
+        button.style.cssText = `
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            width: 40px !important;
+            height: 40px !important;
+            border-radius: 50% !important;
+            cursor: pointer !important;
+            color: #8e9297 !important;
+            background: transparent !important;
+            border: none !important;
+            transition: background 0.2s ease !important;
+            margin-right: 2px !important;
+            flex-shrink: 0 !important;
+        `;
+
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.style.cssText = "width: 24px; height: 24px; fill: currentColor;";
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", "M15,16h4v2h-4V16z M15,8h7v2h-7V8z M15,12h6v2h-6V12z M3,18c0,1.1,0.9,2,2,2h6c1.1,0,2-0.9,2-2V8H3V18z M14,5h-3l-1-1H6L5,5H2v2h12V5z");
+        svg.appendChild(path);
+        button.appendChild(svg);
+
+        button.onmouseenter = () => {
+            button.style.color = '#d93025';
+            button.style.background = 'rgba(232, 234, 237, 0.08)';
+            showTooltip(button, `Xóa nhanh (Giữ ${MESSAGES_TO_KEEP} tin đầu)`);
+        };
+        button.onmouseleave = () => {
+            button.style.color = '#8e9297';
+            button.style.background = 'transparent';
+            hideTooltip();
+        };
+
+        button.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            deleteMessagesSequentially();
+        };
+
+        // Chèn trước nút dấu cộng
+        targetContainer.insertBefore(button, plusBtn);
+    }
+
+    setInterval(createIndestructibleSVGButton, 1000);
+
+})();
