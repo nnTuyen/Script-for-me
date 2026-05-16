@@ -1,0 +1,170 @@
+// ==UserScript==
+// @name         Kocowa - Open Downsub From Episode Link
+// @namespace    http://tampermonkey.net/
+// @version      3.0
+// @description  Tự động lấy link tập Kocowa, copy link và mở Downsub
+// @author       You
+// @match        https://www.kocowa.com/*
+// @grant        GM_setClipboard
+// @grant        GM_openInTab
+// @run-at       document-start
+// @downloadURL  https://raw.githubusercontent.com/Hetboy95/Script-for-me/refs/heads/main/Kocowa-copy-link
+// @updateURL    https://raw.githubusercontent.com/Hetboy95/Script-for-me/refs/heads/main/Kocowa-copy-link
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    let lastHandledUrl = '';
+    let lastHandledAt = 0;
+
+    function showToast(message) {
+        const render = () => {
+            const toast = document.createElement('div');
+            toast.textContent = message;
+            Object.assign(toast.style, {
+                position: 'fixed',
+                top: '20px',
+                right: '20px',
+                zIndex: '999999',
+                background: 'linear-gradient(135deg, #00c853, #00e676)',
+                color: '#fff',
+                padding: '14px 24px',
+                borderRadius: '10px',
+                fontSize: '15px',
+                fontWeight: '600',
+                fontFamily: 'Arial, sans-serif',
+                boxShadow: '0 4px 20px rgba(0,200,83,0.4)',
+                transition: 'opacity 0.4s ease, transform 0.4s ease',
+                opacity: '0',
+                transform: 'translateY(-10px)',
+                pointerEvents: 'none',
+            });
+
+            document.body.appendChild(toast);
+
+            requestAnimationFrame(() => {
+                toast.style.opacity = '1';
+                toast.style.transform = 'translateY(0)';
+            });
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(-10px)';
+                setTimeout(() => toast.remove(), 400);
+            }, 2500);
+        };
+
+        if (document.body) render();
+        else document.addEventListener('DOMContentLoaded', render, { once: true });
+    }
+
+    function findContentId(element) {
+        let el = element;
+        while (el && el !== document.body) {
+            if (el.dataset && el.dataset.contentId) return el.dataset.contentId;
+            if (el.getAttribute && el.getAttribute('data-content-id')) {
+                return el.getAttribute('data-content-id');
+            }
+            el = el.parentElement;
+        }
+        return null;
+    }
+
+    function isClickableItem(element) {
+        let el = element;
+        while (el && el !== document.body) {
+            if (el.classList && (
+                el.classList.contains('anchor') ||
+                el.classList.contains('card') ||
+                el.classList.contains('card-media') ||
+                el.classList.contains('card-img-holder') ||
+                el.classList.contains('media-title-link') ||
+                el.classList.contains('img-container')
+            )) {
+                return true;
+            }
+            el = el.parentElement;
+        }
+        return false;
+    }
+
+    function buildVideoUrl(contentId) {
+        return 'https://www.kocowa.com/en_us/video/' + contentId + '/';
+    }
+
+    function findVideoLinkHref(element) {
+        let el = element;
+        while (el && el !== document.body) {
+            if (el.tagName === 'A') {
+                const href = el.getAttribute('href') || '';
+                if (/\/video\/\d+/.test(href)) {
+                    if (href.startsWith('/')) return 'https://www.kocowa.com' + href;
+                    return href;
+                }
+            }
+            el = el.parentElement;
+        }
+        return null;
+    }
+
+    function buildDownsubUrl(videoUrl) {
+        return 'https://downsub.com/?url=' + encodeURIComponent(videoUrl);
+    }
+
+    function openDownsub(videoUrl) {
+        const now = Date.now();
+
+        // Tránh mở 2 tab do mousedown + click cùng chạy
+        if (videoUrl === lastHandledUrl && now - lastHandledAt < 1200) {
+            return;
+        }
+
+        lastHandledUrl = videoUrl;
+        lastHandledAt = now;
+
+        const downsubUrl = buildDownsubUrl(videoUrl);
+
+        GM_setClipboard(videoUrl, 'text');
+        GM_openInTab(downsubUrl, {
+            active: true,
+            insert: true,
+            setParent: true
+        });
+
+        showToast('Đã mở Downsub: ' + videoUrl);
+        console.log('[Kocowa Downsub] Video URL:', videoUrl);
+        console.log('[Kocowa Downsub] Downsub URL:', downsubUrl);
+    }
+
+    function handleClick(e) {
+        const directUrl = findVideoLinkHref(e.target);
+        if (directUrl) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            openDownsub(directUrl);
+            return;
+        }
+
+        const contentId = findContentId(e.target);
+        if (contentId && isClickableItem(e.target)) {
+            const videoUrl = buildVideoUrl(contentId);
+
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            openDownsub(videoUrl);
+        }
+    }
+
+    document.addEventListener('mousedown', handleClick, true);
+    document.addEventListener('click', handleClick, true);
+
+    if (/\/video\/\d+/.test(window.location.pathname)) {
+        const url = window.location.href.split('?')[0];
+        setTimeout(() => openDownsub(url), 300);
+    }
+
+    console.log('[Kocowa Downsub] v3.0 loaded');
+})();
