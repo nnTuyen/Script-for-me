@@ -1,0 +1,366 @@
+// ==UserScript==
+// @name         YouTube Translate Button V16.1 (Pause / Resume / Stop)
+// @namespace    http://tampermonkey.net/
+// @version      16.1
+// @description  Tự động dịch bình luận với nút Pause/Resume và Stop hoàn nguyên bản gốc.
+// @author       Nguyễn Ngọc Tuyên
+// @match        https://www.youtube.com/*
+// @match        https://m.youtube.com/*
+// @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Dich-Youtube
+// @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Dich-Youtube
+// @grant        none
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    const COMMENT_HEADER_KEYWORDS = ["Bình luận", "Comments", "bình luận", "comments", "Tiêu đề", "Transcript"];
+    const TRANSLATE_TEXTS = ["dịch sang tiếng việt", "translate to vietnamese", "베트남어로 번역"];
+
+    // V16.1: Bỏ "see translation" và "bản dịch tự động" vì khi Stop chúng có thể dịch lại thay vì hoàn nguyên
+    const ORIGINAL_TEXTS = ["xem bản gốc", "xem văn bản gốc", "see original", "nguyên văn"];
+
+    const ID_CTRL_PREFIX = "yt-trans-ctrl-";
+    const BUTTON_LABEL = "Dịch comment";
+
+    const MODE_IDLE = "idle";
+    const MODE_RUNNING = "running";
+    const MODE_PAUSED = "paused";
+
+    let translationMode = MODE_IDLE;
+    let translateGeneration = 0;
+    let observerTimeout = null;
+
+    const wrapperStyle = {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0",
+        zIndex: "9999"
+    };
+
+    const buttonBaseStyle = {
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        height: "32px",
+        border: "1px solid #ccc",
+        backgroundColor: "transparent",
+        color: "#0f0f0f",
+        cursor: "pointer",
+        fontWeight: "500",
+        fontSize: "13px",
+        fontFamily: "Roboto, Arial, sans-serif",
+        whiteSpace: "nowrap",
+        boxSizing: "border-box",
+        transition: "background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease"
+    };
+
+    function isDarkMode() {
+        return !!document.querySelector("html[dark]");
+    }
+
+    function isHomePage() {
+        const path = window.location.pathname;
+        return path === "/" || path === "";
+    }
+
+    function isVideoPage() {
+        const href = window.location.href;
+        return href.includes("/watch") || href.includes("/shorts");
+    }
+
+    function createIcon(type) {
+        if (type === "pause") {
+            return `
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <rect x="6" y="4" width="4" height="16" rx="2"></rect>
+                    <rect x="14" y="4" width="4" height="16" rx="2"></rect>
+                </svg>
+            `;
+        }
+
+        if (type === "play") {
+            return `
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M8 5.5v13a1 1 0 0 0 1.53.85l10-6.5a1 1 0 0 0 0-1.7l-10-6.5A1 1 0 0 0 8 5.5z"></path>
+                </svg>
+            `;
+        }
+
+        return `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+            </svg>
+        `;
+    }
+
+    function createButton(type) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.dataset.role = type;
+        Object.assign(btn.style, buttonBaseStyle);
+        return btn;
+    }
+
+    function createControl(uniqueId) {
+        const wrapper = document.createElement("div");
+        wrapper.id = uniqueId;
+        wrapper.dataset.ctrl = "translate";
+        Object.assign(wrapper.style, wrapperStyle);
+
+        const mainBtn = createButton("main");
+        const stopBtn = createButton("stop");
+
+        if (uniqueId.includes("normal")) {
+            wrapper.style.marginLeft = "15px";
+            wrapper.style.marginRight = "5px";
+        } else if (uniqueId.includes("shorts")) {
+            wrapper.style.marginRight = "8px";
+        } else if (uniqueId.includes("masthead")) {
+            wrapper.style.marginLeft = "20px";
+        }
+
+        mainBtn.addEventListener("click", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            handleMainButtonClick();
+        });
+
+        stopBtn.addEventListener("click", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            stopTranslation();
+        });
+
+        wrapper.appendChild(mainBtn);
+        wrapper.appendChild(stopBtn);
+
+        updateControlVisual(wrapper);
+        return wrapper;
+    }
+
+    function updateControlVisual(wrapper) {
+        const isDark = isDarkMode();
+        const mainBtn = wrapper.querySelector('button[data-role="main"]');
+        const stopBtn = wrapper.querySelector('button[data-role="stop"]');
+
+        if (!mainBtn || !stopBtn) return;
+
+        const defaultBorder = isDark ? "#666" : "#ccc";
+        const defaultText = isDark ? "#fff" : "#0f0f0f";
+        const activeColor = "#065fd4";
+        const activeBg = isDark ? "rgba(6, 95, 212, 0.20)" : "rgba(6, 95, 212, 0.10)";
+        const stopColor = "#c62828";
+        const stopBg = isDark ? "rgba(198, 40, 40, 0.18)" : "rgba(198, 40, 40, 0.08)";
+
+        if (translationMode === MODE_IDLE) {
+            mainBtn.innerHTML = BUTTON_LABEL;
+            mainBtn.title = "Bật tự động dịch comment";
+            mainBtn.setAttribute("aria-label", "Dịch comment");
+            mainBtn.style.width = "auto";           // V16.1: Reset width để text không bị cắt
+            mainBtn.style.minWidth = "unset";
+            mainBtn.style.padding = "0 14px";
+            mainBtn.style.borderRadius = "18px";
+            mainBtn.style.borderColor = defaultBorder;
+            mainBtn.style.color = defaultText;
+            mainBtn.style.backgroundColor = "transparent";
+
+            stopBtn.style.display = "none";
+            stopBtn.innerHTML = "";
+            return;
+        }
+
+        const leftIcon = translationMode === MODE_RUNNING ? "pause" : "play";
+        const leftTitle = translationMode === MODE_RUNNING ? "Tạm dừng tự động dịch" : "Tiếp tục tự động dịch";
+
+        mainBtn.innerHTML = createIcon(leftIcon);
+        mainBtn.title = leftTitle;
+        mainBtn.setAttribute("aria-label", leftTitle);
+        mainBtn.style.width = "42px";
+        mainBtn.style.minWidth = "42px";
+        mainBtn.style.padding = "0";
+        mainBtn.style.borderRadius = "18px 0 0 18px";
+        mainBtn.style.borderColor = activeColor;
+        mainBtn.style.color = activeColor;
+        mainBtn.style.backgroundColor = activeBg;
+
+        stopBtn.style.display = "inline-flex";
+        stopBtn.innerHTML = `${createIcon("stop")}<span style="margin-left:6px;">Stop</span>`;
+        stopBtn.title = "Dừng và hoàn nguyên comment gốc";
+        stopBtn.setAttribute("aria-label", "Stop");
+        stopBtn.style.padding = "0 12px";
+        stopBtn.style.borderLeft = "none";
+        stopBtn.style.borderRadius = "0 18px 18px 0";
+        stopBtn.style.borderColor = stopColor;
+        stopBtn.style.color = stopColor;
+        stopBtn.style.backgroundColor = stopBg;
+    }
+
+    function updateVisuals() {
+        const controls = document.querySelectorAll(`[id^="${ID_CTRL_PREFIX}"]`);
+        controls.forEach(updateControlVisual);
+    }
+
+    // V16.1: Dùng element.closest() thay vì click rồi click parent → tránh click đúp đảo trạng thái
+    function clickAllButtons(keywords, gen) {
+        const keywordConditions = keywords.map(k =>
+            `contains(translate(normalize-space(text()), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '${k}')`
+        ).join(' or ');
+
+        const xpath = `//*[${keywordConditions}]`;
+        const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+
+        for (let i = 0; i < result.snapshotLength; i++) {
+            if (gen !== translateGeneration) return;
+
+            const element = result.snapshotItem(i);
+            if (!element || element.offsetParent === null) continue;
+
+            const clickable = element.closest?.('button, [role="button"]') || element;
+            clickable.click();
+        }
+    }
+
+    function startTranslation() {
+        translateGeneration++;
+        const gen = translateGeneration;
+        translationMode = MODE_RUNNING;
+        updateVisuals();
+        clickAllButtons(TRANSLATE_TEXTS, gen);
+    }
+
+    function pauseTranslation() {
+        translateGeneration++;
+        translationMode = MODE_PAUSED;
+        if (observerTimeout) {
+            clearTimeout(observerTimeout);
+            observerTimeout = null;
+        }
+        updateVisuals();
+    }
+
+    function resumeTranslation() {
+        translateGeneration++;
+        const gen = translateGeneration;
+        translationMode = MODE_RUNNING;
+        updateVisuals();
+        clickAllButtons(TRANSLATE_TEXTS, gen);
+    }
+
+    function stopTranslation() {
+        if (translationMode === MODE_IDLE) return;
+
+        translateGeneration++;
+        const gen = translateGeneration;
+        translationMode = MODE_IDLE;
+
+        if (observerTimeout) {
+            clearTimeout(observerTimeout);
+            observerTimeout = null;
+        }
+
+        updateVisuals();
+        clickAllButtons(ORIGINAL_TEXTS, gen);
+    }
+
+    function handleMainButtonClick() {
+        if (translationMode === MODE_IDLE) {
+            startTranslation();
+            return;
+        }
+
+        if (translationMode === MODE_RUNNING) {
+            pauseTranslation();
+            return;
+        }
+
+        resumeTranslation();
+    }
+
+    function scanAndInject() {
+        const headers = document.querySelectorAll('ytd-engagement-panel-title-header-renderer');
+        headers.forEach((header, index) => {
+            if (header.offsetParent === null) return;
+
+            const headerText = header.innerText || "";
+            const isCommentSection = COMMENT_HEADER_KEYWORDS.some(kw => headerText.includes(kw));
+
+            if (isCommentSection) {
+                const endContainer = header.querySelector('#end') || header.querySelector('#menu');
+                if (endContainer) {
+                    const ctrlId = `${ID_CTRL_PREFIX}shorts-${index}`;
+                    if (!endContainer.querySelector(`#${ctrlId}`)) {
+                        const ctrl = createControl(ctrlId);
+                        endContainer.prepend(ctrl);
+                        endContainer.style.display = "flex";
+                        endContainer.style.alignItems = "center";
+                    }
+                }
+            }
+        });
+
+        if (window.location.href.includes("/watch") && !window.location.href.includes("/shorts")) {
+            const sortMenu = document.querySelector("ytd-comments-header-renderer #sort-menu");
+            if (sortMenu && sortMenu.parentNode && !document.getElementById(`${ID_CTRL_PREFIX}normal`)) {
+                const ctrl = createControl(`${ID_CTRL_PREFIX}normal`);
+                sortMenu.parentNode.insertBefore(ctrl, sortMenu.nextSibling);
+            }
+        }
+
+        const masthead = document.querySelector("ytd-masthead #start");
+        const mastheadCtrlId = `${ID_CTRL_PREFIX}masthead`;
+        if (masthead && !document.getElementById(mastheadCtrlId)) {
+            const ctrl = createControl(mastheadCtrlId);
+            masthead.appendChild(ctrl);
+        }
+
+        const mastheadCtrl = document.getElementById(mastheadCtrlId);
+        if (mastheadCtrl) {
+            mastheadCtrl.style.display = isVideoPage() ? "inline-flex" : "none";
+        }
+
+        updateVisuals();
+    }
+
+    document.addEventListener('yt-navigate-finish', function () {
+        if (isHomePage()) {
+            stopTranslation();
+        } else {
+            scanAndInject();
+        }
+    });
+
+    window.addEventListener('popstate', function () {
+        setTimeout(() => {
+            if (isHomePage()) {
+                stopTranslation();
+            } else {
+                scanAndInject();
+            }
+        }, 100);
+    });
+
+    // V16.1: Thêm check isVideoPage() để tránh xử lý vô ích ở trang chủ/kênh
+    const commentObserver = new MutationObserver(() => {
+        if (translationMode !== MODE_RUNNING || !isVideoPage()) return;
+
+        if (observerTimeout) clearTimeout(observerTimeout);
+        observerTimeout = setTimeout(() => {
+            if (translationMode === MODE_RUNNING && isVideoPage()) {
+                clickAllButtons(TRANSLATE_TEXTS, translateGeneration);
+            }
+        }, 200);
+    });
+
+    commentObserver.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+
+    // V16.1: Tăng interval lên 1500ms + chỉ chạy trên trang video để giảm tải
+    setInterval(() => {
+        if (isVideoPage()) {
+            scanAndInject();
+        }
+    }, 1500);
+})();
