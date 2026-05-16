@@ -1,0 +1,86 @@
+// ==UserScript==
+// @name         Auto Download VTT - Final Alignment
+// @namespace    http://tampermonkey.net/
+// @version      1.8
+// @description  Căn chỉnh lại độ cao (11px) để khớp hoàn toàn với nút Guest
+// @author       Nguyễn Ngọc Tuyên
+// @match        *://goplay.ml/*
+// @match        *://goplay.su/*
+// @grant        none
+// @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/VTT-Goplay
+// @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/VTT-Goplay
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    let vttContent = "";
+
+    function getFileName() {
+        const path = window.location.pathname;
+        const parts = path.split('/').filter(p => p !== "");
+        let name = parts[parts.length - 1] || "subtitles";
+        return name + ".vtt";
+    }
+
+    const oldXHROpen = window.XMLHttpRequest.prototype.open;
+    window.XMLHttpRequest.prototype.open = function(method, url) {
+        if (url.includes("subs.vtt") || url.endsWith(".vtt")) {
+            this.addEventListener('load', function() {
+                vttContent = this.responseText;
+                showDownloadButton();
+            });
+        }
+        return oldXHROpen.apply(this, arguments);
+    };
+
+    function showDownloadButton() {
+        let btn = document.getElementById("btn-download-vtt");
+
+        if (!btn) {
+            btn = document.createElement("button");
+            btn.id = "btn-download-vtt";
+
+            // --- ĐIỀU CHỈNH TOẠ ĐỘ ---
+            btn.style.position = "fixed";
+            // Kéo nút LÊN 2px so với bản trước (14px -> 12px)
+            btn.style.top = "11px";
+            btn.style.right = "170px";
+            btn.style.height = "34px";
+            btn.style.zIndex = "99999";
+
+            // --- GIAO DIỆN ---
+            btn.style.backgroundColor = "#ffffff";
+            btn.style.color = "#333333";
+            btn.style.border = "none";
+            btn.style.borderRadius = "4px";
+            btn.style.padding = "0 15px";
+            btn.style.cursor = "pointer";
+            btn.style.fontWeight = "600";
+            btn.style.fontSize = "13px";
+            btn.style.fontFamily = "sans-serif"; // Đảm bảo font chữ đồng bộ
+
+            // Căn giữa chữ tuyệt đối
+            btn.style.display = "flex";
+            btn.style.alignItems = "center";
+            btn.style.justifyContent = "center";
+            btn.style.boxShadow = "0 1px 2px rgba(0,0,0,0.1)"; // Bóng nhẹ cho giống
+
+            btn.onclick = function() {
+                if (!vttContent) return alert("Đang tải dữ liệu...");
+                const blob = new Blob([vttContent], { type: 'text/vtt' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = getFileName();
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            };
+
+            document.body.appendChild(btn);
+        }
+        btn.innerText = "⬇ Tải Sub " + getFileName().replace(".vtt", "").replace("Episode-", "Tập ");
+    }
+})();
