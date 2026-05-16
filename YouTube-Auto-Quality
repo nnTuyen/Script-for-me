@@ -1,0 +1,240 @@
+// ==UserScript==
+// @name         YouTube Auto Quality Picker
+// @namespace    local.youtube.auto-quality
+// @version      1.0.1
+// @description  Tu dong chon chat luong video YouTube theo tuy chon da luu, khong khoa chon thu cong.
+// @author       Nguyễn Ngọc Tuyên
+// @match        https://www.youtube.com/*
+// @match        https://m.youtube.com/*
+// @match        https://www.youtube-nocookie.com/embed/*
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
+// @run-at       document-idle
+// @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/YouTube-Auto-Quality
+// @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/YouTube-Auto-Quality
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  var STORAGE_KEY = 'yt_auto_quality_preference';
+  var DEFAULT_QUALITY = 'hd1080';
+  var CHECK_INTERVAL_MS = 1000;
+  var APPLY_WINDOW_MS = 8000;
+
+  var QUALITY_ORDER = [
+    'highres',
+    'hd4320',
+    'hd2880',
+    'hd2160',
+    'hd1440',
+    'hd1080',
+    'hd720',
+    'large',
+    'medium',
+    'small',
+    'tiny'
+  ];
+
+  var QUALITY_LABELS = {
+    highres: 'Cao nhat / 8K+',
+    hd4320: '4320p / 8K',
+    hd2880: '2880p / 5K',
+    hd2160: '2160p / 4K',
+    hd1440: '1440p / 2K',
+    hd1080: '1080p',
+    hd720: '720p',
+    large: '480p',
+    medium: '360p',
+    small: '240p',
+    tiny: '144p'
+  };
+
+  var currentVideoId = '';
+  var applyUntil = 0;
+  var intervalId = 0;
+
+  function getPreference() {
+    return GM_getValue(STORAGE_KEY, DEFAULT_QUALITY);
+  }
+
+  function setPreference(value) {
+    GM_setValue(STORAGE_KEY, value);
+    requestApply();
+  }
+
+  function getPlayer() {
+    var player = document.getElementById('movie_player');
+    if (player && typeof player.setPlaybackQuality === 'function') {
+      return player;
+    }
+    return null;
+  }
+
+  function getVideo() {
+    return document.querySelector('video');
+  }
+
+  function getVideoId() {
+    var match = location.href.match(/[?&]v=([^&]+)/);
+    return match ? decodeURIComponent(match[1]) : location.pathname;
+  }
+
+  function qualityRank(quality) {
+    var index = QUALITY_ORDER.indexOf(quality);
+    return index === -1 ? 9999 : index;
+  }
+
+  function pickBestAvailable(preferred, available) {
+    if (!Array.isArray(available) || available.length === 0) {
+      return preferred;
+    }
+
+    if (available.indexOf(preferred) !== -1) {
+      return preferred;
+    }
+
+    if (preferred === 'highres') {
+      return available.slice().sort(function (a, b) {
+        return qualityRank(a) - qualityRank(b);
+      })[0];
+    }
+
+    var preferredRank = qualityRank(preferred);
+
+    var lowerOrEqual = available
+      .filter(function (quality) {
+        return qualityRank(quality) >= preferredRank;
+      })
+      .sort(function (a, b) {
+        return qualityRank(a) - qualityRank(b);
+      })[0];
+
+    if (lowerOrEqual) {
+      return lowerOrEqual;
+    }
+
+    return available.slice().sort(function (a, b) {
+      return qualityRank(a) - qualityRank(b);
+    })[0];
+  }
+
+  function getTargetQuality() {
+    var player = getPlayer();
+    var preferred = getPreference();
+    var available = player && typeof player.getAvailableQualityLevels === 'function'
+      ? player.getAvailableQualityLevels()
+      : [];
+
+    return pickBestAvailable(preferred, available);
+  }
+
+  function applyQuality() {
+    var player = getPlayer();
+    var video = getVideo();
+
+    if (!player || !video) {
+      return false;
+    }
+
+    var target = getTargetQuality();
+
+    try {
+      player.setPlaybackQuality(target);
+      return true;
+    } catch (error) {
+      console.warn('[YouTube Auto Quality Picker] Khong the dat chat luong:', error);
+      return false;
+    }
+  }
+
+  function isTargetApplied() {
+    var player = getPlayer();
+
+    if (!player || typeof player.getPlaybackQuality !== 'function') {
+      return false;
+    }
+
+    return player.getPlaybackQuality() === getTargetQuality();
+  }
+
+  function requestApply() {
+    applyUntil = Date.now() + APPLY_WINDOW_MS;
+    applyQuality();
+
+    if (!intervalId) {
+      intervalId = window.setInterval(function () {
+        if (Date.now() > applyUntil || isTargetApplied()) {
+          window.clearInterval(intervalId);
+          intervalId = 0;
+          return;
+        }
+
+        applyQuality();
+      }, CHECK_INTERVAL_MS);
+    }
+  }
+
+  function handleNavigation() {
+    var nextVideoId = getVideoId();
+
+    if (nextVideoId !== currentVideoId) {
+      currentVideoId = nextVideoId;
+      requestApply();
+    }
+  }
+
+  function registerMenu() {
+    GM_registerMenuCommand('Chat luong hien tai: ' + (QUALITY_LABELS[getPreference()] || getPreference()), function () {
+      var options = QUALITY_ORDER
+        .map(function (quality, index) {
+          return (index + 1) + '. ' + QUALITY_LABELS[quality] + ' (' + quality + ')';
+        })
+        .join('\n');
+
+      var input = prompt(
+        'Nhap so thu tu hoac ma chat luong:\n\n' + options,
+        getPreference()
+      );
+
+      if (!input) {
+        return;
+      }
+
+      var trimmed = input.trim();
+      var numericIndex = Number(trimmed) - 1;
+
+      var nextQuality = isFinite(numericIndex) &&
+        Math.floor(numericIndex) === numericIndex &&
+        QUALITY_ORDER[numericIndex]
+        ? QUALITY_ORDER[numericIndex]
+        : trimmed;
+
+      if (QUALITY_ORDER.indexOf(nextQuality) === -1) {
+        alert('Gia tri khong hop le. Vi du: hd1080, hd720, large, medium.');
+        return;
+      }
+
+      setPreference(nextQuality);
+      alert('Da dat chat luong uu tien: ' + QUALITY_LABELS[nextQuality] + ' (' + nextQuality + ')');
+    });
+
+    GM_registerMenuCommand('Ap lai chat luong ngay', requestApply);
+  }
+
+  function observeVideoChanges() {
+    var observer = new MutationObserver(handleNavigation);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  registerMenu();
+  observeVideoChanges();
+
+  window.addEventListener('yt-navigate-finish', handleNavigation);
+  window.addEventListener('yt-player-updated', requestApply);
+  window.addEventListener('loadedmetadata', requestApply, true);
+  window.addEventListener('canplay', requestApply, true);
+
+  handleNavigation();
+})();
