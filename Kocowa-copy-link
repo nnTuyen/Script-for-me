@@ -8,8 +8,8 @@
 // @grant        GM_setClipboard
 // @grant        GM_openInTab
 // @run-at       document-start
-// @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/kocowa-downsub/Kocowa-copy-link
-// @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/kocowa-downsub/Kocowa-copy-link
+// @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Kocowa-copy-link
+// @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Kocowa-copy-link
 // ==/UserScript==
 
 (function() {
