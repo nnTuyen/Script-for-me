@@ -1,0 +1,132 @@
+// ==UserScript==
+// @name        YouTube Download yt-dlp (Translate Style)
+// @namespace   http://tampermonkey.net/
+// @match       *://*.youtube.com/*
+// @grant       none
+// @run-at      document-idle
+// @version     11.5
+// @author      Nguyễn Ngọc Tuyên
+// @description Tải video YouTube với phong cách nút giống nút Dịch Comment
+// @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/YouTube-Download-ytdlp
+// @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/YouTube-Download-ytdlp
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const BTN_ID = 'universal-ytdlp-btn';
+    const STYLE_ID = 'ytdlp-btn-style';
+
+    function isDarkMode() {
+        return !!document.querySelector("html[dark]");
+    }
+
+    const btoaUrl = (url) => {
+        return btoa(url).replace(/\//g, "_").replace(/\+/g, "-").replace(/\=/g, "");
+    };
+
+    const triggerDownload = () => {
+        const currentUrl = window.location.href;
+        const encodedUrl = btoaUrl(currentUrl);
+        const encodedRef = btoaUrl(currentUrl);
+        const finalUrl = `mpv://ytdl/${encodedUrl}/?referer=${encodedRef}`;
+        window.location.href = finalUrl;
+    };
+
+    const injectStyles = () => {
+        if (document.getElementById(STYLE_ID)) return;
+        const style = document.createElement('style');
+        style.id = STYLE_ID;
+        style.textContent = `
+            #${BTN_ID}:hover {
+                background-color: rgba(0,0,0,0.05) !important;
+            }
+            html[dark] #${BTN_ID}:hover {
+                background-color: rgba(255,255,255,0.1) !important;
+            }
+        `;
+        document.head.appendChild(style);
+    };
+
+    const createSafeSvgIcon = () => {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.style.cssText = 'width: 18px; height: 18px; fill: currentColor; margin-right: 6px;';
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'M17 18v1H6v-1h11zm-.5-6.6-.7-.7-3.8 3.7V4h-1v10.4l-3.8-3.8-.7.7 5 5 5-4.9z');
+        svg.appendChild(path);
+        return svg;
+    };
+
+    const applyButtonTheme = (btn) => {
+        const isDark = isDarkMode();
+        btn.style.borderColor = isDark ? "#666" : "#ccc";
+        btn.style.color = isDark ? "#fff" : "#0f0f0f";
+    };
+
+    const createButton = () => {
+        const btn = document.createElement('button');
+        btn.id = BTN_ID;
+
+        btn.style.cssText = `
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: 1px solid #ccc;
+            border-radius: 18px;
+            padding: 0 15px;
+            height: 32px;
+            cursor: pointer;
+            margin-left: 10px;
+            font-family: "Roboto","Arial",sans-serif;
+            font-size: 13px;
+            font-weight: 500;
+            color: #0f0f0f;
+            transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+            white-space: nowrap;
+            width: auto;
+            box-sizing: border-box;
+        `;
+
+        // Áp dụng màu theo theme hiện tại
+        applyButtonTheme(btn);
+
+        // Icon
+        btn.appendChild(createSafeSvgIcon());
+
+        // Text
+        const textSpan = document.createElement('span');
+        textSpan.textContent = 'Yt-dlp';
+        btn.appendChild(textSpan);
+
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            triggerDownload();
+        });
+
+        return btn;
+    };
+
+    const insertButton = () => {
+        if (!window.location.pathname.startsWith('/watch')) return;
+
+        const existing = document.getElementById(BTN_ID);
+        if (existing) {
+            // Cập nhật theme nếu nút đã tồn tại (user chuyển dark/light)
+            applyButtonTheme(existing);
+            return;
+        }
+
+        const commentHeader = document.querySelector('ytd-comments-header-renderer #title');
+
+        if (commentHeader) {
+            injectStyles();
+            const btn = createButton();
+            commentHeader.appendChild(btn);
+        }
+    };
+
+    setInterval(insertButton, 1000);
+})();
