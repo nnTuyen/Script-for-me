@@ -1,0 +1,235 @@
+// ==UserScript==
+// @name         Video Transform - Rotate & Flip
+// @namespace    https://greasyfork.org/
+// @version      1.0.1
+// @description  Xoay video 90° bằng phím r, lật ngang (mirror) bằng phím s. Hỗ trợ mọi trang web HTML5.
+// @description:en  Rotate video 90° with r key, horizontally flip (mirror) with s key. Works on all HTML5 video sites.
+// @author       You
+// @match        *://*/*
+// @exclude      *://*reddit.com/*
+// @exclude      *://aistudio.google.com/*
+// @exclude      *://colab.research.google.com/*
+// @grant        none
+// @license      MIT
+// @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Rotate-Flip
+// @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Rotate-Flip
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    /* ========== CẤU HÌNH ========== */
+    const CONFIG = {
+        ROTATE_KEY: 'r',
+        FLIP_KEY: 's',
+    };
+
+    /* ========== TRẠNG THÁI ========== */
+    const videoState = new WeakMap();
+    const videoObservers = new WeakMap();
+    let activeVideo = null;
+    let toastTimer = null;
+    let selfUpdating = false; // guard để tránh MutationObserver vòng lặp
+
+    function getState(video) {
+        if (!videoState.has(video)) {
+            videoState.set(video, { rotation: 0, flipped: false });
+        }
+        return videoState.get(video);
+    }
+
+    /* ========== STYLES & TOAST (chờ DOM sẵn sàng) ========== */
+    let toast = null;
+
+    function ensureUI() {
+        if (toast) return;
+        const style = document.createElement('style');
+        style.textContent = `
+            .vt-toast {
+                position: fixed;
+                z-index: 2147483647;
+                pointer-events: none;
+                padding: 6px 14px;
+                border-radius: 6px;
+                font: bold 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                color: #fff;
+                background: rgba(0, 0, 0, 0.70);
+                -webkit-backdrop-filter: saturate(180%) blur(14px);
+                backdrop-filter: saturate(180%) blur(14px);
+                white-space: nowrap;
+                opacity: 0;
+                transform: translateY(-6px);
+                transition: opacity .2s, transform .2s;
+            }
+            .vt-toast.visible {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        `;
+        (document.head || document.documentElement).appendChild(style);
+
+        toast = document.createElement('div');
+        toast.className = 'vt-toast';
+        (document.body || document.documentElement).appendChild(toast);
+    }
+
+    function showToast(video, msg) {
+        ensureUI();
+        const rect = video.getBoundingClientRect();
+        toast.textContent = msg;
+        toast.style.top = (rect.top + 12) + 'px';
+        toast.style.left = (rect.left + 12) + 'px';
+        toast.classList.add('visible');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove('visible'), 1500);
+    }
+
+    /* ========== TRANSFORM ========== */
+
+    function computeScale(video, degree) {
+        if (degree !== 90 && degree !== 270) return 1;
+        const vW = video.videoWidth;
+        const vH = video.videoHeight;
+        const eW = video.clientWidth;
+        const eH = video.clientHeight;
+        if (vW && vH && eW && eH) {
+            const r = Math.min(eW / vW, eH / vH);
+            const cW = vW * r;
+            const cH = vH * r;
+            return Math.min(eW / cH, eH / cW);
+        }
+        return 1;
+    }
+
+    function applyTransform(video) {
+        const s = getState(video);
+        const scale = computeScale(video, s.rotation);
+        const parts = [];
+        if (s.rotation !== 0) parts.push(`rotate(${s.rotation}deg)`);
+        if (scale !== 1) parts.push(`scale(${scale})`);
+        if (s.flipped) parts.push('scaleX(-1)');
+        const transform = parts.join(' ') || '';
+
+        // Đặt guard để MutationObserver bỏ qua thay đổi do chính ta gây ra
+        selfUpdating = true;
+        if (transform) {
+            video.style.setProperty('transform', transform, 'important');
+        } else {
+            video.style.removeProperty('transform');
+        }
+        selfUpdating = false;
+    }
+
+    /* ========== THEO DÕI SITE RESET TRANSFORM ========== */
+
+    function watchVideo(video) {
+        if (videoObservers.has(video)) return;
+
+        const observer = new MutationObserver(() => {
+            // Bỏ qua nếu chính script đang cập nhật
+            if (selfUpdating) return;
+
+            const s = getState(video);
+            if (s.rotation === 0 && !s.flipped) return;
+
+            // Site đã thay đổi transform → reapply
+            applyTransform(video);
+        });
+
+        observer.observe(video, {
+            attributes: true,
+            attributeFilter: ['style'],
+        });
+
+        videoObservers.set(video, observer);
+    }
+
+    /* ========== LẤY VIDEO HIỆN TẠI ========== */
+
+    function getActiveVideo() {
+        if (activeVideo && activeVideo.isConnected) return activeVideo;
+
+        const videos = Array.from(document.querySelectorAll('video'));
+        if (videos.length === 0) return null;
+        if (videos.length === 1) return videos[0];
+
+        // Ưu tiên video đang phát
+        const playing = videos.find(v => !v.paused && !v.ended && v.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA);
+        if (playing) return playing;
+
+        // Fall back: video lớn nhất
+        let largest = null;
+        let maxArea = 0;
+        for (const v of videos) {
+            const rect = v.getBoundingClientRect();
+            const area = rect.width * rect.height;
+            if (area > maxArea && rect.width > 0 && rect.height > 0) {
+                maxArea = area;
+                largest = v;
+            }
+        }
+        return largest || videos[0];
+    }
+
+    /* ========== HÀNH ĐỘNG ========== */
+
+    function handleRotate() {
+        const video = getActiveVideo();
+        if (!video) return;
+        activeVideo = video;
+
+        const s = getState(video);
+        s.rotation = (s.rotation + 90) % 360;
+        applyTransform(video);
+        watchVideo(video);
+        showToast(video, `🔄 Rotate: ${s.rotation}°`);
+    }
+
+    function handleFlip() {
+        const video = getActiveVideo();
+        if (!video) return;
+        activeVideo = video;
+
+        const s = getState(video);
+        s.flipped = !s.flipped;
+        applyTransform(video);
+        watchVideo(video);
+        showToast(video, s.flipped ? '🪞 Mirror: ON' : '🪞 Mirror: OFF');
+    }
+
+    /* ========== SỰ KIỆN ========== */
+
+    document.addEventListener('play', (e) => {
+        if (e.target instanceof HTMLVideoElement) activeVideo = e.target;
+    }, true);
+
+    function isEditableTarget(target) {
+        if (!target) return false;
+        const isEditable = target.isContentEditable ||
+            (target.getAttribute && target.getAttribute('contenteditable') === 'true');
+        const isInput = /INPUT|TEXTAREA|SELECT|LABEL/.test(target.nodeName);
+        return isEditable || isInput;
+    }
+
+    window.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+        if (isEditableTarget(e.target)) return;
+
+        const key = e.key.toLowerCase();
+
+        if (key === CONFIG.ROTATE_KEY) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            handleRotate();
+            return;
+        }
+
+        if (key === CONFIG.FLIP_KEY) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            handleFlip();
+            return;
+        }
+    }, true);
+
+})();
