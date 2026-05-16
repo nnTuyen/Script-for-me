@@ -1,0 +1,365 @@
+// ==UserScript==
+// @name         VietFilm - Fix Player Fit Viewport
+// @namespace    https://github.com/local/userscripts
+// @version      2.0
+// @description  Fix RoPhim/YanHH3D player fit, plus HHDragon JWPlayer/iframe horizontal scrollbar
+// @author       local
+// @match        *://yanhh3d.id/*
+// @match        *://yanhh3d.me/*
+// @match        *://yanhh3d.com/*
+// @match        *://yanhh3d.net/*
+// @match        *://yanhh3d.app/*
+// @match        *://yanhh3d.bz/*
+// @match        *://rophim1.vip/*
+// @match        *://rophim*.vip/*
+// @match        *://hhdragon.site/*
+// @match        *://hhdragon.*/*
+// @run-at       document-start
+// @grant        none
+// @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Fix-Player-Fit
+// @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Fix-Player-Fit
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    const earlyStyle = document.createElement('style');
+    earlyStyle.id = 'vietfilm-fix-early';
+    earlyStyle.textContent = `
+        html {
+            overflow-y: scroll !important;
+            scrollbar-gutter: stable !important;
+        }
+
+        iframe {
+            overflow: hidden !important;
+            border: 0 !important;
+        }
+
+        .vf-fit-player {
+            width: min(100%, calc(var(--vf-player-h, 720px) * 16 / 9)) !important;
+            height: var(--vf-player-h, auto) !important;
+            max-height: var(--vf-player-h, none) !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
+            overflow: hidden !important;
+            aspect-ratio: 16 / 9 !important;
+        }
+
+        .vf-fit-player iframe {
+            display: block !important;
+            width: 100% !important;
+            height: 100% !important;
+            min-height: 0 !important;
+        }
+
+        /* ===== HHDragon: page-level overflow containment ===== */
+        body.vf-hhdragon,
+        body.vf-hhdragon #ah_wrapper,
+        body.vf-hhdragon .ah_content,
+        body.vf-hhdragon .watching-movie {
+            max-width: 100vw !important;
+            overflow-x: hidden !important;
+        }
+
+        /* ===== HHDragon: player container ===== */
+        body.vf-hhdragon #video-player.vf-fit-player {
+            width: 100% !important;
+            max-width: 100% !important;
+            height: var(--vf-hhdragon-h, auto) !important;
+            max-height: none !important;
+            margin-left: 0 !important;
+            margin-right: 0 !important;
+            overflow: hidden !important;
+            background: #000 !important;
+            aspect-ratio: 16 / 9 !important;
+            box-sizing: border-box !important;
+        }
+
+        /* ===== HHDragon: global max-width + box-sizing on player descendants ===== */
+        body.vf-hhdragon #video-player,
+        body.vf-hhdragon #video-player * {
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+        }
+
+        /* ===== HHDragon IFRAME mode: responsive padding wrapper ===== */
+        body.vf-hhdragon #video-player.vf-fit-player.vf-hh-iframe > div {
+            position: relative !important;
+            width: 100% !important;
+            height: 100% !important;
+            padding-bottom: 0 !important;
+            overflow: hidden !important;
+        }
+
+        body.vf-hhdragon #video-player.vf-fit-player.vf-hh-iframe iframe {
+            position: absolute !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            min-height: 0 !important;
+            border: 0 !important;
+            display: block !important;
+        }
+
+        /* ===== HHDragon JWPLAYER mode ===== */
+        body.vf-hhdragon #video-player.vf-fit-player.vf-hh-jw > *,
+        body.vf-hhdragon #video-play,
+        body.vf-hhdragon .jwplayer,
+        body.vf-hhdragon .jw-wrapper,
+        body.vf-hhdragon .jw-media,
+        body.vf-hhdragon .jw-preview,
+        body.vf-hhdragon .jw-controls,
+        body.vf-hhdragon .jw-display,
+        body.vf-hhdragon video {
+            width: 100% !important;
+            max-width: 100% !important;
+            height: 100% !important;
+            min-height: 0 !important;
+            max-height: none !important;
+            left: 0 !important;
+            right: auto !important;
+            box-sizing: border-box !important;
+        }
+
+        body.vf-hhdragon .jwplayer,
+        body.vf-hhdragon .jwplayer * {
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+        }
+
+        body.vf-hhdragon #video-player,
+        body.vf-hhdragon #video-play,
+        body.vf-hhdragon .jwplayer,
+        body.vf-hhdragon .jw-wrapper,
+        body.vf-hhdragon .jw-media,
+        body.vf-hhdragon .jw-controls,
+        body.vf-hhdragon .jw-controlbar {
+            overflow: hidden !important;
+        }
+
+        body.vf-hhdragon #video-player::-webkit-scrollbar,
+        body.vf-hhdragon #video-play::-webkit-scrollbar,
+        body.vf-hhdragon .jwplayer::-webkit-scrollbar,
+        body.vf-hhdragon .jw-wrapper::-webkit-scrollbar {
+            height: 0 !important;
+            width: 0 !important;
+            display: none !important;
+        }
+
+        body.vf-hhdragon .jw-aspect {
+            display: none !important;
+            padding-top: 0 !important;
+        }
+
+        body.vf-hhdragon #video-player .loading {
+            height: 100% !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: center !important;
+            margin-bottom: 0 !important;
+        }
+
+        /* ===== Nuclear scrollbar kill for HHDragon player ===== */
+        body.vf-hhdragon #video-player,
+        body.vf-hhdragon #video-player > * {
+            scrollbar-width: none !important;
+            -ms-overflow-style: none !important;
+        }
+        body.vf-hhdragon #video-player::-webkit-scrollbar,
+        body.vf-hhdragon #video-player > *::-webkit-scrollbar {
+            display: none !important;
+            width: 0 !important;
+            height: 0 !important;
+        }
+    `;
+    (document.head || document.documentElement).appendChild(earlyStyle);
+
+    function isHHDragon() {
+        return location.hostname.includes('hhdragon');
+    }
+
+    function isPlayerIframe(iframe) {
+        const src = iframe.src || '';
+        const wrap = iframe.closest(
+            '[class*="player"], [id*="player"], .video-box, [class*="embed"], [class*="watch"]'
+        );
+
+        return (
+            src.includes('bilibili') ||
+            src.includes('bili') ||
+            src.includes('player') ||
+            src.includes('embed') ||
+            src.includes('stream') ||
+            src.includes('video') ||
+            wrap !== null
+        );
+    }
+
+    function findPlayerBox(iframe) {
+        if (location.hostname.includes('rophim')) {
+            return iframe.closest(
+                '#player-wrap, [class*="player-wrap"], [class*="watch-player"], [class*="player"], [class*="video"]'
+            ) || iframe.parentElement;
+        }
+
+        return iframe.closest(
+            '[class*="player"], [id*="player"], .video-box, [class*="embed"], [class*="watch"]'
+        ) || iframe.parentElement;
+    }
+
+    function fitIframePlayer(iframe) {
+        if (!isPlayerIframe(iframe)) return;
+
+        iframe.removeAttribute('scrolling');
+        iframe.setAttribute('scrolling', 'no');
+        iframe.style.overflow = 'hidden';
+
+        const box = findPlayerBox(iframe);
+        if (!box) return;
+
+        box.classList.add('vf-fit-player');
+
+        const rect = box.getBoundingClientRect();
+        const viewportH = window.innerHeight || document.documentElement.clientHeight;
+        const viewportW = window.innerWidth || document.documentElement.clientWidth;
+        const top = Math.max(rect.top, 0);
+        const availableH = viewportH - top - 16;
+        const boxW = rect.width || box.offsetWidth || viewportW;
+        const idealH = Math.round(boxW * 9 / 16);
+        const minH = Math.min(360, Math.max(220, availableH));
+        const finalH = Math.max(minH, Math.min(idealH, availableH));
+
+        box.style.setProperty('--vf-player-h', `${Math.round(finalH)}px`);
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+    }
+
+    function fitHHDragon() {
+        if (!isHHDragon()) return;
+
+        if (document.body) {
+            document.body.classList.add('vf-hhdragon');
+            document.documentElement.style.overflowX = 'hidden';
+            document.body.style.overflowX = 'hidden';
+        }
+
+        const player = document.querySelector('#video-player');
+        if (!player) return;
+
+        player.classList.add('vf-fit-player');
+
+        const parent = player.parentElement;
+        const parentW = parent ? parent.clientWidth : 0;
+        const viewportW = document.documentElement.clientWidth || window.innerWidth;
+        const width = Math.min(parentW || viewportW, viewportW);
+        const height = Math.round(width * 9 / 16);
+
+        player.style.setProperty('--vf-hhdragon-h', `${height}px`);
+        player.style.width = '100%';
+        player.style.maxWidth = '100%';
+        player.style.height = `${height}px`;
+        player.style.maxHeight = 'none';
+        player.style.overflow = 'hidden';
+
+        // Detect player type: iframe-based or JWPlayer-based
+        const iframe = player.querySelector('iframe');
+        const jwplayer = player.querySelector('.jwplayer, #video-play');
+
+        if (iframe && !jwplayer) {
+            // ===== IFRAME MODE =====
+            player.classList.add('vf-hh-iframe');
+            player.classList.remove('vf-hh-jw');
+
+            // Fix the padding-bottom responsive wrapper
+            const wrapper = iframe.parentElement;
+            if (wrapper && wrapper !== player) {
+                wrapper.style.position = 'relative';
+                wrapper.style.width = '100%';
+                wrapper.style.height = '100%';
+                wrapper.style.paddingBottom = '0';
+                wrapper.style.overflow = 'hidden';
+            }
+
+            iframe.removeAttribute('scrolling');
+            iframe.setAttribute('scrolling', 'no');
+            iframe.style.position = 'absolute';
+            iframe.style.top = '0';
+            iframe.style.left = '0';
+            iframe.style.width = '100%';
+            iframe.style.height = '100%';
+            iframe.style.border = '0';
+            iframe.style.overflow = 'hidden';
+            iframe.style.display = 'block';
+
+        } else {
+            // ===== JWPLAYER MODE =====
+            player.classList.add('vf-hh-jw');
+            player.classList.remove('vf-hh-iframe');
+
+            player.querySelectorAll('#video-play, .jwplayer, .jw-wrapper, .jw-media, .jw-preview, .jw-controls, .jw-controlbar, video').forEach(el => {
+                el.style.width = '100%';
+                el.style.maxWidth = '100%';
+                el.style.height = '100%';
+                el.style.maxHeight = 'none';
+                el.style.left = '0';
+                el.style.boxSizing = 'border-box';
+                el.style.overflow = 'hidden';
+            });
+        }
+
+        // Final pass: kill any overflow on all descendants
+        [player, ...player.querySelectorAll('*')].forEach(el => {
+            if (!(el instanceof HTMLElement)) return;
+
+            el.style.maxWidth = '100%';
+            el.style.boxSizing = 'border-box';
+
+            if (el.scrollWidth > el.clientWidth + 2) {
+                el.style.overflowX = 'hidden';
+            }
+        });
+    }
+
+    function fixAllPlayers() {
+        if (isHHDragon()) {
+            fitHHDragon();
+            return;
+        }
+
+        document.querySelectorAll('iframe').forEach(fitIframePlayer);
+    }
+
+    function onReady(fn) {
+        if (document.readyState !== 'loading') fn();
+        else document.addEventListener('DOMContentLoaded', fn, { once: true });
+    }
+
+    let raf = 0;
+    function scheduleFix() {
+        cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(fixAllPlayers);
+    }
+
+    onReady(() => {
+        fixAllPlayers();
+
+        setTimeout(fixAllPlayers, 500);
+        setTimeout(fixAllPlayers, 1500);
+        setTimeout(fixAllPlayers, 3000);
+        setTimeout(fixAllPlayers, 6000);
+
+        window.addEventListener('resize', scheduleFix, { passive: true });
+        window.addEventListener('orientationchange', scheduleFix, { passive: true });
+
+        new MutationObserver(scheduleFix).observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['style', 'class']
+        });
+    });
+})();
+
