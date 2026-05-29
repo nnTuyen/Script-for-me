@@ -1,0 +1,191 @@
+// ==UserScript==
+// @name         Reddit Auto-Reveal Spoilers
+// @namespace    http://tampermonkey.net/
+// @version      4.6
+// @description  Tự động hiện spoiler trên Reddit Shreddit/new Reddit mà không cần click
+// @author       Nguyễn Ngọc Tuyên
+// @match        https://www.reddit.com/*
+// @match        https://sh.reddit.com/*
+// @match        https://new.reddit.com/*
+// @grant        none
+// @run-at       document-start
+// @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Reddit-Auto-Reveal-Spoil
+// @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Reddit-Auto-Reveal-Spoil
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    const SELECTORS = [
+        'shreddit-spoiler',
+        'shreddit-blurred-container[reason="spoiler"]',
+        '.md-spoiler-text',
+        '[data-testid="spoiler-text"]',
+        'span[class*="spoiler"]'
+    ].join(',');
+
+    function injectStyle() {
+        if (document.getElementById('reddit-auto-reveal-spoilers-style')) return;
+
+        const style = document.createElement('style');
+        style.id = 'reddit-auto-reveal-spoilers-style';
+        style.textContent = `
+            .md-spoiler-text,
+            .md-spoiler-text:hover,
+            .md-spoiler-text:active,
+            [data-testid="spoiler-text"],
+            span[class*="spoiler"] {
+                background-color: transparent !important;
+                color: inherit !important;
+                filter: none !important;
+                -webkit-text-fill-color: inherit !important;
+                cursor: auto !important;
+            }
+
+            shreddit-spoiler[revealed],
+            shreddit-spoiler[revealed="true"] {
+                cursor: auto !important;
+            }
+
+            shreddit-blurred-container[reason="spoiler"][blurred="false"] {
+                filter: none !important;
+            }
+        `;
+
+        (document.head || document.documentElement).appendChild(style);
+    }
+
+    function isUserInteracting() {
+        const active = document.activeElement;
+        if (!active || active === document.body) return false;
+
+        const tag = active.tagName ? active.tagName.toLowerCase() : '';
+        if (tag === 'input' || tag === 'textarea' || active.isContentEditable) {
+            return true;
+        }
+
+        return Boolean(
+            active.closest &&
+            active.closest(
+                'reddit-search-large, [data-testid="search"], faceplate-search-input, [role="search"], [role="combobox"], [role="dialog"], [role="listbox"]'
+            )
+        );
+    }
+
+    function revealMarkdownSpoiler(el) {
+        el.classList.add('md-spoiler-text--revealed');
+        el.style.setProperty('background-color', 'transparent', 'important');
+        el.style.setProperty('color', 'inherit', 'important');
+        el.style.setProperty('filter', 'none', 'important');
+        el.style.setProperty('-webkit-text-fill-color', 'inherit', 'important');
+    }
+
+    function revealInlineShredditSpoiler(el) {
+        if (el.revealed === true || el.getAttribute('revealed') === 'true' || el.hasAttribute('revealed')) {
+            return;
+        }
+
+        el.revealed = true;
+        el.setAttribute('revealed', 'true');
+    }
+
+    function revealBlurredContainer(el) {
+        if (el.dataset.spoilerRevealed === 'true') return;
+
+        if (el.getAttribute('is-richtext-content') !== null) {
+            const articleBody = el.querySelector("[property='schema:articleBody']");
+
+            if (articleBody && el.getAttribute('mode') !== 'wrap') {
+                el.replaceWith(articleBody);
+                return;
+            }
+        }
+
+        el.blurred = false;
+        el.setAttribute('blurred', 'false');
+        el.dataset.spoilerRevealed = 'true';
+    }
+
+    function revealNode(root) {
+        if (!root || root.nodeType !== Node.ELEMENT_NODE) return;
+
+        if (root.matches && root.matches('shreddit-spoiler')) {
+            revealInlineShredditSpoiler(root);
+        } else if (root.matches && root.matches('shreddit-blurred-container[reason="spoiler"]')) {
+            revealBlurredContainer(root);
+        } else if (root.matches && root.matches('.md-spoiler-text, [data-testid="spoiler-text"], span[class*="spoiler"]')) {
+            revealMarkdownSpoiler(root);
+        }
+
+        if (!root.querySelectorAll) return;
+
+        root.querySelectorAll(SELECTORS).forEach((el) => {
+            if (el.matches('shreddit-spoiler')) {
+                revealInlineShredditSpoiler(el);
+                return;
+            }
+
+            if (el.matches('shreddit-blurred-container[reason="spoiler"]')) {
+                revealBlurredContainer(el);
+                return;
+            }
+
+            revealMarkdownSpoiler(el);
+        });
+    }
+
+    function revealAll() {
+        if (isUserInteracting()) return;
+        revealNode(document.documentElement);
+    }
+
+    let debounceTimer = null;
+    function scheduleReveal() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(revealAll, 80);
+    }
+
+    injectStyle();
+
+    const observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+            if (mutation.type === 'attributes') {
+                revealNode(mutation.target);
+                continue;
+            }
+
+            for (const node of mutation.addedNodes) {
+                revealNode(node);
+            }
+        }
+    });
+
+    observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['revealed', 'blurred', 'mode', 'is-richtext-content']
+    });
+
+    document.addEventListener('readystatechange', scheduleReveal, true);
+    window.addEventListener('load', scheduleReveal, { once: true });
+    window.addEventListener('popstate', () => setTimeout(revealAll, 300));
+
+    const originalPushState = history.pushState;
+    history.pushState = function () {
+        const result = originalPushState.apply(this, arguments);
+        setTimeout(revealAll, 300);
+        return result;
+    };
+
+    const originalReplaceState = history.replaceState;
+    history.replaceState = function () {
+        const result = originalReplaceState.apply(this, arguments);
+        setTimeout(revealAll, 300);
+        return result;
+    };
+
+    setTimeout(revealAll, 300);
+    setTimeout(revealAll, 1200);
+    setInterval(revealAll, 2500);
+})();
