@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name        Be Vietnam Pro
 // @namespace   http://tampermonkey.net/
-// @version     5.5
+// @version     5.6
 // @description Dùng font Be Vietnam Pro cho mọi trang, không lỗi icon
-// @author      Tuyên
+// @author      Nguyễn Ngọc Tuyên
 // @match       *://*/*
 // @exclude     *://aistudio.google.com/*
 // @exclude     *://fonts.google.com/*
 // @exclude     *://*.artstation.com/*
+// @exclude     *://gemini.google.com/*
+// @exclude     *://*.android.com/*
 // @grant       GM_addStyle
 // @run-at      document-start
 // @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/script_beVNpro_font
@@ -40,11 +42,15 @@
 
     // 4. CSS áp dụng font — không còn @import
     var customCSS = [
-        "body, h1, h2, h3, h4, h5, h6, p, blockquote, pre, a, b, u, strong, em, input, select, textarea, fieldset, legend, label {",
+        // Đã loại bỏ các thẻ a, b, u, strong, em để tránh ghi đè font lên icon không điều kiện
+        "body, h1, h2, h3, h4, h5, h6, p, blockquote, pre, input, select, textarea, fieldset, legend, label {",
         "  font-family: 'Be Vietnam Pro', sans-serif !important;",
         "  -webkit-font-smoothing: antialiased; }",
-        "*:not([class*='icon']):not([class*='Icon']):not([class*='fa']):not([class*='material']):not([class*='symbol']):not([class*='svg']):not([class*='ico']):not([class*='badge']):not([class*='ripple']) {",
+        
+        // Loại trừ thẻ i và các class icon thông dụng bao gồm cả các class icon của Weibo (wbicon, ficon, wfont...)
+        "*:not(i):not([class*='icon']):not([class*='Icon']):not([class*='fa']):not([class*='material']):not([class*='symbol']):not([class*='svg']):not([class*='ico']):not([class*='badge']):not([class*='ripple']):not([class*='wbicon']):not([class*='ficon']):not([class*='wfont']):not([class*='iconfont']) {",
         "  font-family: 'Be Vietnam Pro', sans-serif !important; }",
+        
         ".material-icons, .material-icons-outlined, .material-symbols-outlined, .google-symbols, .mat-icon {",
         "  font-family: 'Material Symbols Outlined', 'Material Icons', 'Google Symbols' !important;",
         "  font-weight: normal !important; font-style: normal !important; }",
