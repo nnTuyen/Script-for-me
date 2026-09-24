@@ -10,11 +10,16 @@
 // @exclude     *://*.artstation.com/*
 // @exclude     *://gemini.google.com/*
 // @exclude     *://*.android.com/*
+// @exclude     *://claude.ai/*
+// @exclude     *://huarw.com/*
+// @exclude     http://127.0.0.1:8000/*
+// @exclude     http://localhost:8000/*
 // @grant       GM_addStyle
 // @run-at      document-start
-// @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/script_beVNpro_font
-// @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/script_beVNpro_font
+// @downloadURL https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/script_beVNpro_font
+// @updateURL   https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/script_beVNpro_font
 // ==/UserScript==
+
 (function() {
     'use strict';
 
@@ -46,11 +51,11 @@
         "body, h1, h2, h3, h4, h5, h6, p, blockquote, pre, input, select, textarea, fieldset, legend, label {",
         "  font-family: 'Be Vietnam Pro', sans-serif !important;",
         "  -webkit-font-smoothing: antialiased; }",
-        
+
         // Loại trừ thẻ i và các class icon thông dụng bao gồm cả các class icon của Weibo (wbicon, ficon, wfont...)
         "*:not(i):not([class*='icon']):not([class*='Icon']):not([class*='fa']):not([class*='material']):not([class*='symbol']):not([class*='svg']):not([class*='ico']):not([class*='badge']):not([class*='ripple']):not([class*='wbicon']):not([class*='ficon']):not([class*='wfont']):not([class*='iconfont']) {",
         "  font-family: 'Be Vietnam Pro', sans-serif !important; }",
-        
+
         ".material-icons, .material-icons-outlined, .material-symbols-outlined, .google-symbols, .mat-icon {",
         "  font-family: 'Material Symbols Outlined', 'Material Icons', 'Google Symbols' !important;",
         "  font-weight: normal !important; font-style: normal !important; }",
