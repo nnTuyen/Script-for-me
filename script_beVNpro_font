@@ -14,6 +14,7 @@
 // @exclude     *://huarw.com/*
 // @exclude     http://127.0.0.1:8000/*
 // @exclude     http://localhost:8000/*
+// @exclude     https://datingshow.pages.dev/*
 // @grant       GM_addStyle
 // @run-at      document-start
 // @downloadURL https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/script_beVNpro_font
