@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Auto-Reveal Spoilers
 // @namespace    http://tampermonkey.net/
-// @version      4.6
+// @version      4.7
 // @description  Tự động hiện spoiler trên Reddit Shreddit/new Reddit mà không cần click
 // @author       Nguyễn Ngọc Tuyên
 // @match        https://www.reddit.com/*
@@ -24,6 +24,9 @@
         'span[class*="spoiler"]'
     ].join(',');
 
+    // Track elements already processed to avoid redundant work
+    const processed = new WeakSet();
+
     function injectStyle() {
         if (document.getElementById('reddit-auto-reveal-spoilers-style')) return;
 
@@ -42,6 +45,21 @@
                 cursor: auto !important;
             }
 
+            /* CSS-only reveal for shreddit-spoiler — avoids JS state manipulation */
+            shreddit-spoiler {
+                --spoiler-bg: transparent !important;
+                color: inherit !important;
+                filter: none !important;
+                cursor: auto !important;
+                pointer-events: auto !important;
+            }
+
+            shreddit-spoiler::part(spoiler) {
+                background-color: transparent !important;
+                color: inherit !important;
+                filter: none !important;
+            }
+
             shreddit-spoiler[revealed],
             shreddit-spoiler[revealed="true"] {
                 cursor: auto !important;
@@ -49,6 +67,14 @@
 
             shreddit-blurred-container[reason="spoiler"][blurred="false"] {
                 filter: none !important;
+            }
+
+            /* Prevent spoiler internal overlays from capturing clicks */
+            shreddit-spoiler > [style*="position"],
+            shreddit-spoiler > button,
+            shreddit-spoiler::before,
+            shreddit-spoiler::after {
+                pointer-events: none !important;
             }
         `;
 
@@ -73,6 +99,9 @@
     }
 
     function revealMarkdownSpoiler(el) {
+        if (processed.has(el)) return;
+        processed.add(el);
+
         el.classList.add('md-spoiler-text--revealed');
         el.style.setProperty('background-color', 'transparent', 'important');
         el.style.setProperty('color', 'inherit', 'important');
@@ -81,29 +110,94 @@
     }
 
     function revealInlineShredditSpoiler(el) {
+        if (processed.has(el)) return;
         if (el.revealed === true || el.getAttribute('revealed') === 'true' || el.hasAttribute('revealed')) {
+            processed.add(el);
             return;
         }
 
+        // Pause observer to prevent mutation loop when we set attributes
+        pauseObserver();
+
         el.revealed = true;
         el.setAttribute('revealed', 'true');
+
+        // Prevent the spoiler from stealing focus/clicks after reveal
+        neutralizeSpoilerEvents(el);
+
+        processed.add(el);
+
+        // Resume observer on next microtask so our own mutations are fully settled
+        queueMicrotask(resumeObserver);
     }
 
     function revealBlurredContainer(el) {
-        if (el.dataset.spoilerRevealed === 'true') return;
+        if (processed.has(el)) return;
+        if (el.dataset.spoilerRevealed === 'true') {
+            processed.add(el);
+            return;
+        }
 
         if (el.getAttribute('is-richtext-content') !== null) {
             const articleBody = el.querySelector("[property='schema:articleBody']");
 
             if (articleBody && el.getAttribute('mode') !== 'wrap') {
+                processed.add(el);
                 el.replaceWith(articleBody);
                 return;
             }
         }
 
+        pauseObserver();
+
         el.blurred = false;
         el.setAttribute('blurred', 'false');
         el.dataset.spoilerRevealed = 'true';
+
+        processed.add(el);
+
+        queueMicrotask(resumeObserver);
+    }
+
+    /**
+     * Prevent a revealed spoiler element from intercepting clicks
+     * that should go to underlying/surrounding content.
+     */
+    function neutralizeSpoilerEvents(el) {
+        if (el.dataset.eventsNeutralized) return;
+        el.dataset.eventsNeutralized = 'true';
+
+        // Stop the spoiler's internal click handler from firing and stealing focus
+        el.addEventListener('click', function (e) {
+            // Only intercept if already revealed — let normal clicks through to children
+            if (el.revealed === true || el.hasAttribute('revealed')) {
+                // Don't stop propagation for links/buttons inside the spoiler content
+                const target = e.target;
+                if (target !== el) {
+                    const interactive = target.closest('a, button, [role="button"], input, textarea, select, [tabindex]');
+                    if (interactive && el.contains(interactive)) {
+                        return; // Let clicks on interactive children work normally
+                    }
+                }
+                e.stopImmediatePropagation();
+            }
+        }, true); // Capture phase — fires before the component's own handler
+
+        // Prevent the element from grabbing focus
+        el.addEventListener('focus', function (e) {
+            if (el.revealed === true || el.hasAttribute('revealed')) {
+                e.preventDefault();
+                el.blur();
+            }
+        }, true);
+
+        // Remove any shadow DOM click overlays
+        if (el.shadowRoot) {
+            const overlays = el.shadowRoot.querySelectorAll('[style*="position"], button, [role="button"]');
+            overlays.forEach(overlay => {
+                overlay.style.setProperty('pointer-events', 'none', 'important');
+            });
+        }
     }
 
     function revealNode(root) {
@@ -145,27 +239,54 @@
         debounceTimer = setTimeout(revealAll, 80);
     }
 
-    injectStyle();
+    // --- Observer management: pause/resume to prevent mutation loops ---
+    let observerActive = false;
+    let pendingResume = false;
 
     const observer = new MutationObserver((mutations) => {
+        let needsReveal = false;
         for (const mutation of mutations) {
             if (mutation.type === 'attributes') {
-                revealNode(mutation.target);
+                // Skip mutations on elements we already processed
+                if (!processed.has(mutation.target)) {
+                    revealNode(mutation.target);
+                }
                 continue;
             }
 
             for (const node of mutation.addedNodes) {
-                revealNode(node);
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                    revealNode(node);
+                }
             }
         }
     });
 
-    observer.observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['revealed', 'blurred', 'mode', 'is-richtext-content']
-    });
+    function startObserver() {
+        if (observerActive) return;
+        observer.observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['revealed', 'blurred', 'mode', 'is-richtext-content']
+        });
+        observerActive = true;
+    }
+
+    function pauseObserver() {
+        if (!observerActive) return;
+        observer.disconnect();
+        observerActive = false;
+    }
+
+    function resumeObserver() {
+        if (observerActive) return;
+        startObserver();
+    }
+
+    // --- Initialization ---
+    injectStyle();
+    startObserver();
 
     document.addEventListener('readystatechange', scheduleReveal, true);
     window.addEventListener('load', scheduleReveal, { once: true });
@@ -174,6 +295,7 @@
     const originalPushState = history.pushState;
     history.pushState = function () {
         const result = originalPushState.apply(this, arguments);
+        // Clear processed cache on navigation so new page content gets processed
         setTimeout(revealAll, 300);
         return result;
     };
