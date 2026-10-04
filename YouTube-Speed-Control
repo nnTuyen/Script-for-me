@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         YouTube Speed Control
 // @namespace    https://youtube.com/
-// @version      6.2
+// @version      6.3
 // @description  Điều chỉnh tốc độ YouTube — Bảng chọn tốc độ + phím tắt Shift+> / Shift+< / Ctrl+/ + popup tốc độ đã fix
-// @author       You
+// @author       Nguyễn Ngọc Tuyên
 // @match        https://www.youtube.com/*
 // @match        https://youtube.com/*
 // @grant        GM_addStyle
@@ -16,10 +16,8 @@
     'use strict';
 
     const SPEED_STEPS = [
-        0.25, 0.5, 0.75,
-        1.0, 1.25, 1.5, 1.75,
-        2.0, 2.1, 2.2, 2.3,
-        2.5, 3.0, 4.0, 6.0
+        0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75,
+        2.0, 2.1, 2.2, 2.3, 2.5, 3.0, 4.0, 6.0
     ];
     const DEFAULT_SPEED = 1.0;
     const SLIDER_STEP = 0.05;
@@ -67,7 +65,7 @@
             border-radius: 12px;
             display: flex;
             flex-direction: column;
-            width: 100px;
+            width: 160px;
             z-index: 2147483647;
             box-shadow: 0 8px 32px rgba(0,0,0,0.45);
             border: 1px solid rgba(255,255,255,0.12);
@@ -125,7 +123,9 @@
         }
 
         .yt-speed-list {
-            max-height: 240px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            max-height: 280px;
             overflow-y: auto;
             scrollbar-width: thin;
             scrollbar-color: rgba(255,255,255,0.2) transparent;
