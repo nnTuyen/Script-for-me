@@ -1,0 +1,1052 @@
+// ==UserScript==
+// @name         Google AI Studio | RAM & Typing Lag Optimizer
+// @namespace    https://greasyfork.org/en/users/antigravity
+// @version      3.1
+// @author       Antigravity (Patched)
+// @license      AGPL-3.0
+// @description  Cơ chế MỚI: LUÔN giữ nguyên 2 tin nhắn gần nhất (dù dài hay ngắn) + mọi tin chưa quá dài → không mất ngữ cảnh; chỉ thu gọn những block QUÁ DÀI (file code, đoạn code copy >4k ký tự / >700 node) qua MutationObserver trong ≤800ms. Fix self-loop observer, escape title, race Xóa, state restore.
+// @match        https://aistudio.google.com/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=aistudio.google.com
+// @run-at       document-start
+// @grant        none
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    if (window.self !== window.top) return;
+    try { window.__ramOptimizerDestroy?.(); } catch (e) {}
+
+    // ═══════════════════════════════════════════════════════════════
+    //  0. THROTTLE CountTokens — ĐÃ FIX CHUẨN (KHÔNG BỊ MISS KHI GÕ)
+    // ═══════════════════════════════════════════════════════════════
+    const countTokens = {
+        enabled: true,
+        minIntervalMs: 2000,     // Trong 2 giây gõ phím, chỉ gửi tối đa 1 request
+        blockedCount: 0,
+        lastSuccessfulResponse: null,
+        lastFetchTime: 0
+    };
+
+    let originalFetch = null;
+    let originalMatchMedia = null;
+    let chatObserver = null;
+    let observerDebounce = null;
+    let observerPendingSince = 0;
+    let ignoreMutationsUntil = 0;
+    let safetyNetTimer = null;
+    let onVisibilityChange = null;
+
+    // Bỏ qua mutation đến từ UI của chính script này (monitor, placeholder, nút...)
+    const OPT_OWN_UI = '#ram-opt-monitor, #ram-opt-btn-copy-instant, #ram-opt-perf-styles, .ram-opt-msg-placeholder, .ram-opt-collapse-btn, .ram-opt-btn-restore, .ram-opt-btn-delete';
+
+    function isCountTokensUrl(url) {
+        if (!url) return false;
+        return /CountTokens|:countTokens|count[-_]tokens/i.test(String(url));
+    }
+
+    function makeCachedResponse(cache) {
+        if (!cache) return null;
+        return new Response(new Uint8Array(cache.bytes), {
+            status: 200,
+            headers: { 'Content-Type': cache.contentType || 'application/json; charset=utf-8' },
+        });
+    }
+
+    function updateCountTokensStatUI() {
+        const el = document.getElementById('ram-opt-ct-blocked');
+        if (el) el.textContent = countTokens.blockedCount.toLocaleString();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  INSTANT COPY — LẤY TEXT TỪ STREAM
+    // ═══════════════════════════════════════════════════════════════
+    let lastFullResponseText = '';
+    let instantCopyBtn = null;
+
+    function isGenerateContentUrl(url) {
+        if (!url) return false;
+        return /generateContent|streamGenerateContent/i.test(String(url));
+    }
+
+    function captureStreamText(responseClone) {
+        try {
+            const reader = responseClone.body.getReader();
+            const decoder = new TextDecoder();
+            let accumulated = '';
+            let buffer = '';
+
+            function readChunk() {
+                reader.read().then(({ done, value }) => {
+                    if (done) {
+                        if (accumulated.trim().length > 0) {
+                            lastFullResponseText = accumulated;
+                            updateInstantCopyBtnUI();
+                        }
+                        return;
+                    }
+                    buffer += decoder.decode(value, { stream: true });
+                    const matches = buffer.matchAll(/"text"\s*:\s*("(?:[^"\\]|\\.)*")/g);
+                    let consumed = 0;
+                    for (const match of matches) {
+                        try {
+                            const text = JSON.parse(match[1]);
+                            if (typeof text === 'string') accumulated += text;
+                            consumed = match.index + match[0].length;
+                        } catch (e) {
+                            break;
+                        }
+                    }
+                    if (consumed > 0) buffer = buffer.slice(consumed);
+                    if (buffer.length > 65536) buffer = buffer.slice(-8192);
+                    readChunk();
+                }).catch(() => {});
+            }
+            readChunk();
+        } catch (e) {}
+    }
+
+    function ensureInstantCopyBtn() {
+        if (instantCopyBtn && instantCopyBtn.isConnected) {
+            // Nếu bị gắn nhầm vào <html> khi chưa có body → chuyển vào body (giữ nguyên listener)
+            if (document.body && !document.body.contains(instantCopyBtn)) {
+                document.body.appendChild(instantCopyBtn);
+            }
+            return;
+        }
+        instantCopyBtn = document.createElement('button');
+        instantCopyBtn.id = 'ram-opt-btn-copy-instant';
+        instantCopyBtn.style.cssText = `
+            position: fixed; bottom: 150px; left: 14px; z-index: 999999;
+            background: rgba(32, 33, 36, 0.95); color: #57d9a3;
+            border: 1px solid #36b37e; border-radius: 999px; padding: 6px 12px;
+            font-size: 11px; font-family: 'Google Sans', Roboto, sans-serif;
+            cursor: pointer; display: none; box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+            white-space: nowrap;
+        `;
+        instantCopyBtn.addEventListener('click', () => {
+            if (!lastFullResponseText) return;
+            navigator.clipboard.writeText(lastFullResponseText).then(() => {
+                const old = instantCopyBtn.textContent;
+                instantCopyBtn.textContent = '✅ Đã copy!';
+                instantCopyBtn.style.color = '#8ab4f8';
+                setTimeout(() => {
+                    instantCopyBtn.textContent = old;
+                    instantCopyBtn.style.color = '#57d9a3';
+                }, 2000);
+            }).catch(() => {});
+        });
+        (document.body || document.documentElement).appendChild(instantCopyBtn);
+    }
+
+    function updateInstantCopyBtnUI() {
+        if (!lastFullResponseText) return;
+        ensureInstantCopyBtn();
+        instantCopyBtn.textContent = `📋 Copy nhanh (${Math.round(lastFullResponseText.length / 1000)}k ký tự)`;
+        instantCopyBtn.style.display = 'inline-block';
+    }
+
+    function installCountTokensThrottle() {
+        if (window.__ramOptCtThrottleInstalled) return;
+        window.__ramOptCtThrottleInstalled = true;
+
+        if (typeof window.fetch === 'function') {
+            const origFetch = window.fetch;
+            originalFetch = origFetch;
+            window.fetch = function (input, init) {
+                const url = typeof input === 'string' ? input : (input && input.url) || '';
+                const isCT = countTokens.enabled && isCountTokensUrl(url);
+
+                if (isCT) {
+                    const now = Date.now();
+                    // NẾU ĐANG GÕ NHANH: Tái sử dụng ngay response gần nhất thay vì spam request mạng
+                    if (countTokens.lastSuccessfulResponse && (now - countTokens.lastFetchTime < countTokens.minIntervalMs)) {
+                        countTokens.blockedCount++;
+                        updateCountTokensStatUI();
+                        return Promise.resolve(makeCachedResponse(countTokens.lastSuccessfulResponse));
+                    }
+                    countTokens.lastFetchTime = now;
+                }
+
+                if (isGenerateContentUrl(url)) {
+                    lastFullResponseText = '';
+                    if (instantCopyBtn) instantCopyBtn.style.display = 'none';
+                }
+
+                const p = origFetch.call(this, input, init);
+
+                if (isCT) {
+                    p.then(res => {
+                        try {
+                            const ct = res.headers.get('content-type') || '';
+                            res.clone().arrayBuffer().then(buf => {
+                                countTokens.lastSuccessfulResponse = {
+                                    bytes: buf,
+                                    contentType: ct,
+                                    createdAt: Date.now()
+                                };
+                            }).catch(() => {});
+                        } catch (e) {}
+                    }).catch(() => {});
+                }
+
+                if (isGenerateContentUrl(url)) {
+                    p.then(res => {
+                        try { captureStreamText(res.clone()); } catch (e) {}
+                    }).catch(() => {});
+                }
+
+                return p;
+            };
+        }
+    }
+
+    installCountTokensThrottle();
+
+    // ═══════════════════════════════════════════════════════════════
+    //  0b. GIẢ LẬP prefers-reduced-motion (BỎ TYPEWRITER DELAY)
+    // ═══════════════════════════════════════════════════════════════
+    function installReducedMotionOverride() {
+        if (window.__ramOptReducedMotionPatched) return;
+        window.__ramOptReducedMotionPatched = true;
+        const origMatchMedia = window.matchMedia.bind(window);
+        originalMatchMedia = origMatchMedia;
+        window.matchMedia = function (query) {
+            const mql = origMatchMedia(query);
+            try {
+                if (typeof query === 'string' && /prefers-reduced-motion/i.test(query)) {
+                    const realMatches = mql.matches;
+                    Object.defineProperty(mql, 'matches', {
+                        get: () => {
+                            if (CONFIG.FORCE_REDUCED_MOTION === false) return realMatches;
+                            if (/:\s*reduce/i.test(query)) return true;
+                            if (/:\s*no-preference/i.test(query)) return false;
+                            return true;
+                        },
+                        configurable: true,
+                    });
+                }
+            } catch (e) {}
+            return mql;
+        };
+    }
+    installReducedMotionOverride();
+
+    // ═══════════════════════════════════════════════════════════════
+    //  TRUSTED TYPES & CONFIG
+    // ═══════════════════════════════════════════════════════════════
+    const ttPolicy = (function () {
+        if (typeof window.trustedTypes !== 'undefined' && typeof window.trustedTypes.createPolicy === 'function') {
+            try {
+                return window.trustedTypes.createPolicy('ramOptPolicy', { createHTML: (s) => s });
+            } catch (e) {
+                try {
+                    return window.trustedTypes.createPolicy('default', { createHTML: (s) => s });
+                } catch (err) {
+                    return window.trustedTypes.defaultPolicy || null;
+                }
+            }
+        }
+        return null;
+    })();
+
+    function safeSetHTML(element, htmlString) {
+        if (ttPolicy) element.innerHTML = ttPolicy.createHTML(htmlString);
+        else element.innerHTML = htmlString;
+    }
+
+    function safeClearInnerHTML(element) {
+        element.textContent = '';
+    }
+
+    const CONFIG = {
+        // ══ CƠ CHẾ MỚI: thu gọn theo ĐỘ DÀI tin nhắn — KHÔNG còn cắt "chỉ giữ 3 tin mới nhất" ══
+        LONG_MSG_CHARS: 4000,      // Tin ≥ 4.000 ký tự → thu gọn (file code, copy đoạn code quá dài)
+        LONG_MSG_NODES: 700,       // Turn ≥ 700 node DOM (code block syntax-highlight sinh ra rất nhiều thẻ) → thu gọn
+        ACTIVE_EXEMPT_TURNS: 4,    // LUÔN giữ nguyên 2 tin nhắn CUỐI (dù dài hay ngắn) → luôn có ngữ cảnh cho tin kế tiếp. =4 turn: prompt của bạn + phản hồi model gần nhất (đặt 4 nếu muốn giữ 2 full hội thoại)
+        SAFETY_MAX_FULL_TURNS: 40, // VAN PHÒNG RAM: chỉ khi quá 40 turn chưa thu gọn mới cắt turn CŨ nhất (0 = tắt hẳn)
+        AUTO_REMOVE_THINKING: true,
+        AUTO_COLLAPSE_THINKING: true,
+        AUTO_VIRTUALIZE: true,
+        THROTTLE_COUNT_TOKENS: true,
+        FORCE_REDUCED_MOTION: true,
+        DISABLE_TURN_ANIMATIONS: true,
+        DISABLE_GPU_BLUR: true // Gộp script fix-aistudio-lag vào đây
+    };
+
+    // Ngưỡng coi element hiện tại là "placeholder đã thu gọn" (chống Angular render lại nhầm)
+    const PLACEHOLDER_GUARD_NODES = 60;
+    const PLACEHOLDER_GUARD_CHARS = 800;
+
+    console.log('⚡ [AI Studio Optimizer v3.1] Active - luôn giữ 2 tin nhắn cuối, thu gọn tin QUÁ DÀI (≥4k ký tự / ≥700 nodes).');
+
+    function getDOMNodeCount() {
+        return document.querySelectorAll('*').length;
+    }
+
+    function getMemoryInfo() {
+        const mem = performance.memory;
+        if (!mem) return null;
+        return {
+            usedMB: Math.round(mem.usedJSHeapSize / 1048576),
+            totalMB: Math.round(mem.totalJSHeapSize / 1048576),
+            limitMB: Math.round(mem.jsHeapSizeLimit / 1048576),
+        };
+    }
+
+    function isElementInActiveTurn(element) {
+        const allTurns = Array.from(document.querySelectorAll('ms-chat-turn, ms-prompt-turn'));
+        if (allTurns.length === 0) return false;
+        const exempt = Math.max(1, CONFIG.ACTIVE_EXEMPT_TURNS);
+        // Bảo vệ N turn cuối (2 tin nhắn gần nhất + đang stream) — các turn cũ vẫn được dọn bình thường
+        for (const turn of allTurns.slice(-exempt)) {
+            if (turn === element || turn.contains(element)) return true;
+        }
+        return false;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  ĐO ĐỘ DÀI TURN (cache 2s — tránh đo textContent liên tục gây lag)
+    // ═══════════════════════════════════════════════════════════════
+    const turnStatsCache = new WeakMap();
+    const TURN_STATS_TTL = 2000;
+
+    function getTurnStats(turn) {
+        const now = Date.now();
+        const cached = turnStatsCache.get(turn);
+        if (cached && now - cached.at < TURN_STATS_TTL) return cached;
+        let chars = 0, nodes = 0;
+        try {
+            chars = (turn.textContent || '').length;
+            nodes = turn.querySelectorAll('*').length;
+        } catch (e) {}
+        const stats = { chars, nodes, at: now };
+        turnStatsCache.set(turn, stats);
+        return stats;
+    }
+
+    function forgetTurnStats(turn) {
+        try { turnStatsCache.delete(turn); } catch (e) {}
+    }
+
+    function formatCount(n) {
+        return n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : String(n);
+    }
+
+    // Quyết định có thu gọn turn này hay không — dựa trên ĐỘ DÀI, KHÔNG dựa trên vị trí mới/cũ
+    function isTurnTooLong(turn) {
+        const s = getTurnStats(turn);
+        if (s.chars >= CONFIG.LONG_MSG_CHARS) {
+            return { tooLong: true, reason: `${formatCount(s.chars)} ký tự`, stats: s };
+        }
+        if (s.nodes >= CONFIG.LONG_MSG_NODES) {
+            return { tooLong: true, reason: `${formatCount(s.nodes)} nodes`, stats: s };
+        }
+        return { tooLong: false, reason: '', stats: s };
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  1. DỌN DẸP THINKING
+    // ═══════════════════════════════════════════════════════════════
+    function findThinkingElements() {
+        const found = new Set();
+        const directSelectors = [
+            'ms-thinking-block', 'ms-thought-block', 'ms-thought-chunk', 'ms-model-thoughts',
+            '[class*="thinking-block"]', '[class*="thinking-content"]',
+            '[class*="thought-block"]', '[class*="thought-content"]',
+            '[class*="reasoning-block"]', '[class*="reasoning-content"]',
+            '[data-thinking]', '[data-thought]',
+        ];
+        for (const sel of directSelectors) {
+            try { document.querySelectorAll(sel).forEach(el => found.add(el)); } catch (e) {}
+        }
+        return Array.from(found);
+    }
+
+    function removeThinkingContent() {
+        const blocks = findThinkingElements();
+        let removed = 0;
+        let totalNodesFreed = 0;
+
+        for (const block of blocks) {
+            if (!block || !block.isConnected) continue;
+            const tag = block.tagName?.toLowerCase();
+            if (tag === 'ms-chat-turn' || tag === 'ms-prompt-turn') continue;
+            if (block.closest('[data-ram-opt-deleting]')) continue; // đang trong flow Xóa → không đụng
+            if (isElementInActiveTurn(block)) continue;
+
+            const nodeCount = block.querySelectorAll('*').length + 1;
+            try {
+                block.remove();
+                removed++;
+                totalNodesFreed += nodeCount;
+            } catch (e) {
+                block.style.display = 'none';
+                safeClearInnerHTML(block);
+                removed++;
+                totalNodesFreed += nodeCount;
+            }
+        }
+        return { stripped: removed, removed, nodesFreed: totalNodesFreed };
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  2. VIRTUALIZE TIN CŨ (BẢO LƯU DOM GỐC — FIX LỖI KHÔNG XÓA ĐƯỢC)
+    // ═══════════════════════════════════════════════════════════════
+    const virtualizedMessages = new Map();
+    let virtualizedMessageId = 0;
+
+    function findMessageIdByTurn(turn) {
+        for (const [id, data] of virtualizedMessages.entries()) {
+            if (data.turn === turn) return id;
+        }
+        return null;
+    }
+
+    function normalizePreviewText(raw) {
+        return String(raw || '').trim().replace(/\s+/g, ' ')
+            .replace(/^(more_vert|expand_less|expand_more|content_copy|download|code|User|Model|Khôi phục|Xóa|Thu gọn lại|\d{1,2}:\d{2}(\s*(AM|PM))?|\s)+/gi, '')
+            .trim() || '(Nội dung tin nhắn)';
+    }
+
+    // Trích xuất preview sạch (loại bỏ các icon button: more_vert, download, copy...)
+    // Tin QUÁ dài → KHÔNG cloneNode (clone node vài chục nghìn ký tự = tự gây lag), lấy text trực tiếp.
+    function cleanTurnPreviewText(turn) {
+        let raw = '';
+        try { raw = turn.textContent || ''; } catch (e) {}
+        if (raw.length > 4000) return normalizePreviewText(raw);
+
+        try {
+            const clone = turn.cloneNode(true);
+            const nonContent = clone.querySelectorAll(
+                'button, mat-icon, [role="button"], [class*="header"], [class*="action"], [class*="toolbar"], [class*="footer"], ms-thinking-block, ms-model-thoughts, ms-chat-turn-options'
+            );
+            nonContent.forEach(el => el.remove());
+            const text = (clone.textContent || '').trim().replace(/\s+/g, ' ');
+            if (text.length > 0) return text;
+        } catch (e) {}
+
+        return normalizePreviewText(raw);
+    }
+
+    // Thêm nút Thu gọn lại sau khi người dùng đã bấm Khôi phục
+    function addCollapseControl(turn, messageId) {
+        if (turn.querySelector('.ram-opt-collapse-btn')) return;
+        const btn = document.createElement('button');
+        btn.className = 'ram-opt-collapse-btn';
+        btn.type = 'button';
+        btn.textContent = '🔼 Thu gọn lại';
+        btn.style.cssText = `
+            margin: 4px 8px; padding: 2px 8px; font-size: 11px;
+            color: #9aa0a6; background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.15); border-radius: 4px;
+            cursor: pointer; float: right; font-family: 'Google Sans', Roboto, sans-serif;
+            transition: background 0.15s ease;
+        `;
+        btn.onmouseenter = () => btn.style.background = 'rgba(255,255,255,0.1)';
+        btn.onmouseleave = () => btn.style.background = 'rgba(255,255,255,0.05)';
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            btn.remove();
+            delete turn.dataset.ramOptVirtualized;
+            virtualizeSingleTurn(turn, messageId);
+            // User chủ động thu gọn → không bị auto-restore lại khi turn vẫn nằm trong window
+            turn.dataset.ramOptUserCollapsed = '1';
+        };
+        turn.insertBefore(btn, turn.firstChild);
+    }
+
+    // Khôi phục nguyên vẹn các node DOM thật (kèm toàn bộ Angular bindings, event listeners & nút 3 chấm)
+    // byUser=true → user chủ động bấm "Khôi phục" → state 'restored' → không bị tự thu gọn lại
+    // byUser=false → restore tự động (destroy/... ) → state 'auto' → sẽ bị thu gọn lại nếu lại quá dài
+    function restoreVirtualizedMessage(turn, messageId, byUser = false) {
+        const data = virtualizedMessages.get(messageId);
+        if (!data || !data.nodes) return false;
+
+        // Xóa placeholder hiện tại
+        turn.textContent = '';
+
+        // Đưa toàn bộ các element gốc trở lại DOM
+        for (const node of data.nodes) {
+            turn.appendChild(node);
+        }
+
+        turn.dataset.ramOptVirtualized = byUser ? 'restored' : 'auto';
+        delete turn.dataset.ramOptUserCollapsed;
+        turn.style.minHeight = '';
+        turn.style.contain = '';
+
+        addCollapseControl(turn, messageId);
+        return true;
+    }
+
+    // Xóa trực tiếp tin nhắn qua API/Menu thật của Google AI Studio mà không cần F5
+    async function deleteVirtualizedTurn(turn, messageId) {
+        if (!confirm('Bạn có chắc muốn xóa tin nhắn này khỏi Google AI Studio?')) {
+            return;
+        }
+
+        // Flag chống race: observer có thể kích hoạt enforce trong lúc await (60ms/80ms)
+        // → collapseLongMessages + removeThinking + disableAnimations sẽ bỏ qua turn này
+        turn.dataset.ramOptDeleting = '1';
+        let deleted = false;
+        try {
+            // 1. Phục hồi DOM gốc (byUser=true → state 'restored' → main loop không đụng tới)
+            restoreVirtualizedMessage(turn, messageId, true);
+            turn.querySelector('.ram-opt-collapse-btn')?.remove();
+
+            // 2. Chờ DOM ổn định
+            await new Promise(r => setTimeout(r, 60));
+
+            // 3. Tìm nút Options / 3 chấm (theo đúng cấu trúc của AI Studio)
+            const optSelectors = [
+                'ms-chat-turn-options button',
+                'ms-prompt-turn button[aria-label*="More"]',
+                'button[aria-label*="More options"]',
+                'button[aria-label*="Thêm tùy chọn"]',
+                'button.mat-mdc-menu-trigger'
+            ];
+
+            let optBtn = null;
+            for (const sel of optSelectors) {
+                const btns = turn.querySelectorAll(sel);
+                if (btns.length > 0) {
+                    optBtn = btns[btns.length - 1];
+                    break;
+                }
+            }
+
+            // Fallback: Tìm nút có icon hoặc text more_vert
+            if (!optBtn) {
+                const allBtns = Array.from(turn.querySelectorAll('button, [role="button"]'));
+                optBtn = allBtns.find(btn => {
+                    const text = (btn.textContent || '').trim();
+                    const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+                    return text.includes('more_vert') || aria.includes('more') || aria.includes('thêm') || aria.includes('option');
+                });
+            }
+
+            if (optBtn) {
+                optBtn.click();
+                await new Promise(r => setTimeout(r, 80));
+
+                // Tìm nút Delete trong menu panel của Angular Material
+                const menuItems = document.querySelectorAll('button[role="menuitem"], .mat-mdc-menu-item, [role="menu"] button');
+                for (const item of menuItems) {
+                    const text = (item.textContent || item.innerText || '').toLowerCase();
+                    const aria = (item.getAttribute('aria-label') || '').toLowerCase();
+                    if (text.includes('delete') || text.includes('xóa') || text.includes('remove') || aria.includes('delete') || aria.includes('xóa')) {
+                        item.click();
+                        virtualizedMessages.delete(messageId);
+                        deleted = true;
+                        return;
+                    }
+                }
+            }
+            // Không tự click được menu → turn đã phục hồi đầy đủ,
+            // user click nút 3 chấm thủ công được ngay, KHÔNG cần F5.
+        } finally {
+            delete turn.dataset.ramOptDeleting;
+            if (!deleted && turn.isConnected) {
+                // Xóa THẤT BẠI: nếu để state 'restored' thì turn này sẽ không bao giờ
+                // bị virtualize lại nữa (main loop bỏ qua 'restored'). Đánh dấu 'auto'
+                // để lần enforce kế tiếp thu gọn lại → user bấm Xóa thử lại được.
+                turn.dataset.ramOptVirtualized = 'auto';
+            }
+        }
+    }
+
+    function virtualizeSingleTurn(turn, existingId = null, reason = null) {
+        const nodeCount = turn.querySelectorAll('*').length;
+        // Turn rỗng/trivial → không virtualize (placeholder ~14 nodes, virtualize turn <3 nodes = hại ngược)
+        if (nodeCount < 3 && !existingId) return 0;
+
+        const isPrompt = turn.tagName.toLowerCase().includes('prompt');
+        const cleanPreview = cleanTurnPreviewText(turn);
+        const PREVIEW_LEN = 180;
+        const preview = cleanPreview.substring(0, PREVIEW_LEN);
+        const messageId = existingId || `m${++virtualizedMessageId}`;
+
+        // Turn có thể đang chứa nút "Thu gọn lại" (vừa được auto-restore) → gỡ ra
+        // TRƯỚC khi lưu savedNodes, nếu không nút cũ sẽ bị đóng băng trong Map
+        // và quay lại kèm content khi restore (nút lỗi / nhân đôi).
+        // Tương tự: gỡ placeholder cũ (nếu Angular vừa render lại nội dung thật) để không lồng placeholder.
+        turn.querySelectorAll('.ram-opt-collapse-btn').forEach(b => b.remove());
+        turn.querySelectorAll('.ram-opt-msg-placeholder').forEach(p => p.remove());
+
+        // Lý do thu gọn hiển thị trên badge: "12.4k ký tự" / "812 nodes"
+        const stats = getTurnStats(turn);
+        const badgeInfo = reason || `${formatCount(Math.max(stats.chars, cleanPreview.length))} ký tự · ${nodeCount} nodes`;
+
+        // LƯU CÁC NODE DOM THẬT VÀO BỘ NHỚ — KHÔNG PHÁ HỦY BẰNG safeClearInnerHTML
+        const savedNodes = Array.from(turn.childNodes);
+        virtualizedMessages.set(messageId, {
+            nodes: savedNodes,
+            turn: turn,
+            nodeCount: nodeCount,
+            isPrompt: isPrompt,
+            preview: cleanPreview
+        });
+
+        // Tách các node con ra khỏi DOM (giảm tải triệt để cho rendering engine & zone.js)
+        for (const node of savedNodes) {
+            node.remove();
+        }
+
+        const placeholder = document.createElement('div');
+        placeholder.className = 'ram-opt-msg-placeholder';
+        placeholder.style.cssText = `
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 8px 12px; margin: 4px 0; min-height: 24px;
+            border-left: 3px solid ${isPrompt ? '#8ab4f8' : '#81c995'};
+            background: rgba(255, 255, 255, 0.03); border-radius: 4px 8px 8px 4px;
+            font-family: 'Google Sans', Roboto, sans-serif; font-size: 12px;
+            color: #e8eaed; box-sizing: border-box; gap: 10px;
+            transition: background 0.15s ease;
+        `;
+        placeholder.onmouseenter = () => placeholder.style.background = 'rgba(255, 255, 255, 0.06)';
+        placeholder.onmouseleave = () => placeholder.style.background = 'rgba(255, 255, 255, 0.03)';
+
+        safeSetHTML(placeholder, `
+            <div style="display:flex;align-items:center;gap:8px;overflow:hidden;flex:1;min-width:0;">
+                <span style="font-size:14px;flex-shrink:0;">${isPrompt ? '👤' : '🤖'}</span>
+                <span style="font-weight:600;color:${isPrompt ? '#8ab4f8' : '#81c995'};flex-shrink:0;">${isPrompt ? 'User' : 'Model'}:</span>
+                <span style="color:#bdc1c6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHTML(cleanPreview.substring(0, 500))}">${escapeHTML(preview) || '(Trống)'}${cleanPreview.length > PREVIEW_LEN ? '…' : ''}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+                <span style="font-size:10px;color:#9aa0a6;opacity:0.8;" title="${escapeHTML(badgeInfo)}">📏 ${escapeHTML(badgeInfo)}</span>
+                <button type="button" class="ram-opt-btn-restore" style="
+                    background: rgba(138, 180, 248, 0.12); color: #8ab4f8;
+                    border: 1px solid rgba(138, 180, 248, 0.4); border-radius: 4px;
+                    padding: 3px 8px; font-size: 11px; cursor: pointer;
+                ">Khôi phục</button>
+                <button type="button" class="ram-opt-btn-delete" style="
+                    background: rgba(242, 139, 130, 0.12); color: #f28b82;
+                    border: 1px solid rgba(242, 139, 130, 0.4); border-radius: 4px;
+                    padding: 3px 8px; font-size: 11px; cursor: pointer;
+                ">Xóa</button>
+            </div>
+        `);
+
+        placeholder.querySelector('.ram-opt-btn-restore').addEventListener('click', (e) => {
+            e.stopPropagation();
+            restoreVirtualizedMessage(turn, messageId, true);
+        });
+
+        placeholder.querySelector('.ram-opt-btn-delete').addEventListener('click', (e) => {
+            e.stopPropagation();
+            deleteVirtualizedTurn(turn, messageId);
+        });
+
+        turn.appendChild(placeholder);
+        turn.dataset.ramOptVirtualized = 'true';
+        turn.style.minHeight = '0';
+        forgetTurnStats(turn); // stats cũ (tin dài) không được dùng lại cho placeholder
+        return nodeCount;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  2b. THU GỌN TIN QUÁ DÀI — CƠ CHẾ MỚI (GIỮ NGUYÊN NGỮ CẢNH)
+    //  • KHÔNG còn cửa sổ "giữ 3 tin mới nhất" → mọi tin nhắn đều đứng yên trong DOM.
+    //  • Chỉ những block quá dài (file code / code copy >4k ký tự hoặc >700 node) mới bị thu gọn.
+    //  • 2 tin nhắn CUỐI luôn được giữ nguyên (dù dài) → ngữ cảnh cho tin kế tiếp không bị mất.
+    //  • Tin ngắn ở giữa hội thoại → không bao giờ bị đụng tới → mất ngữ cảnh.
+    // ═══════════════════════════════════════════════════════════════
+    let totalCollapsed = 0;
+
+    function collapseLongMessages() {
+        // Dọn sạch các turn đã bị xóa khỏi DOM trong Map
+        for (const [id, data] of virtualizedMessages.entries()) {
+            if (!data.turn || !data.turn.isConnected) {
+                virtualizedMessages.delete(id);
+            }
+        }
+
+        const allTurns = Array.from(document.querySelectorAll('ms-chat-turn, ms-prompt-turn'));
+        if (allTurns.length === 0) return { virtualized: 0, nodesFreed: 0 };
+
+        // 2 tin nhắn CUỐI được MIỄN thu gọn (dù dài hay ngắn) → ngữ cảnh cho tin kế tiếp luôn còn nguyên
+        const lastCheckable = allTurns.length - Math.max(0, CONFIG.ACTIVE_EXEMPT_TURNS);
+        let virtualized = 0;
+        let totalNodesFreed = 0;
+
+        const collapseTurn = (turn, reason = null) => {
+            // findMessageIdByTurn: tái sử dụng messageId cũ, tránh lỗi duplicate entry trong Map
+            const existingId = findMessageIdByTurn(turn);
+            const freed = virtualizeSingleTurn(turn, existingId, reason);
+            if (freed > 0) {
+                virtualized++;
+                totalNodesFreed += freed;
+                totalCollapsed++;
+            }
+        };
+
+        // ── BƯỚC 1: thu gọn theo ĐỘ DÀI (không phân biệt tin mới / tin cũ) ──
+        for (let i = 0; i < lastCheckable; i++) {
+            const turn = allTurns[i];
+            if (turn.dataset.ramOptDeleting) continue;
+            const state = turn.dataset.ramOptVirtualized;
+            if (state === 'restored') continue; // user bấm "Khôi phục" → tôn trọng, không thu lại
+
+            if (state === 'true') {
+                const s = getTurnStats(turn);
+                // Vẫn là placeholder bình thường → bỏ qua
+                if (s.nodes <= PLACEHOLDER_GUARD_NODES && s.chars <= PLACEHOLDER_GUARD_CHARS) continue;
+
+                // Gỡ placeholder ra để xem Angular thực sự còn giữ gì trong turn này
+                const ph = Array.from(turn.querySelectorAll('.ram-opt-msg-placeholder'));
+                ph.forEach(p => p.remove());
+                forgetTurnStats(turn);
+                const rest = getTurnStats(turn);
+
+                if (rest.chars <= PLACEHOLDER_GUARD_CHARS && rest.nodes <= PLACEHOLDER_GUARD_NODES) {
+                    // Chỉ có toolbar/phần tử phụ được thêm vào → gắn placeholder trở lại, không mất gì
+                    ph.forEach(p => turn.appendChild(p));
+                    continue;
+                }
+
+                // Angular đã render lại NỘI DUNG THẬT → bỏ cờ, đo lại ở dưới rồi thu gọn lại từ đầu
+                delete turn.dataset.ramOptVirtualized;
+                turn.style.minHeight = '';
+            }
+
+            const check = isTurnTooLong(turn);
+            if (!check.tooLong) continue;
+            collapseTurn(turn, check.reason);
+        }
+
+        // ── BƯỚC 2: VAN PHÒNG RAM — chỉ khi số turn chưa thu gọn vượt mức an toàn
+        //     mới cắt turn CŨ nhất (mặc định 40 → rất hiếm khi kích hoạt; đặt 0 = tắt hẳn) ──
+        if (CONFIG.SAFETY_MAX_FULL_TURNS > 0) {
+            const candidates = [];
+            for (let i = 0; i < lastCheckable; i++) {
+                const t = allTurns[i];
+                if (t.dataset.ramOptDeleting) continue;
+                const st = t.dataset.ramOptVirtualized;
+                if (st === 'true' || st === 'restored') continue;
+                candidates.push(t);
+            }
+            const overflow = candidates.length - CONFIG.SAFETY_MAX_FULL_TURNS;
+            for (let i = 0; i < overflow; i++) {
+                collapseTurn(candidates[i], `quá ${CONFIG.SAFETY_MAX_FULL_TURNS} turn`);
+            }
+        }
+
+        return { virtualized, nodesFreed: totalNodesFreed };
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  3. CSS VÀ FIX SPELLCHECK / GPU
+    // ═══════════════════════════════════════════════════════════════
+    function injectPerfStyles() {
+        let style = document.getElementById('ram-opt-perf-styles');
+        if (!style) {
+            style = document.createElement('style');
+            style.id = 'ram-opt-perf-styles';
+            (document.head || document.documentElement).appendChild(style);
+        }
+
+        style.textContent = `
+            /* [GỘP TỪ SCRIPT 2] Tắt làm mờ GPU & tắt cuộn mượt giả lập */
+            * {
+                backdrop-filter: none !important;
+                -webkit-backdrop-filter: none !important;
+                scroll-behavior: auto !important;
+            }
+
+            /* TỐI ƯU Ô NHẬP LIỆU: Bỏ gạch chân đỏ chính tả, tăng tốc gõ phím */
+            textarea, [contenteditable="true"] {
+                text-rendering: optimizeSpeed !important;
+                spellcheck: false !important;
+            }
+
+            /* Tắt animation tin nhắn cũ */
+            .ram-opt-no-anim, .ram-opt-no-anim * {
+                animation: none !important;
+                transition: none !important;
+            }
+        `;
+    }
+
+    // Chủ động tắt spellcheck trên DOM để Chrome không tốn CPU quét chữ
+    function disableSpellcheckOnInputs() {
+        document.querySelectorAll('textarea, [contenteditable="true"]').forEach(el => {
+            if (el.getAttribute('spellcheck') !== 'false') {
+                el.setAttribute('spellcheck', 'false');
+                el.setAttribute('autocorrect', 'off');
+                el.setAttribute('autocomplete', 'off');
+            }
+        });
+    }
+
+    function disableAnimationsOnOldContent() {
+        const allTurns = document.querySelectorAll('ms-chat-turn, ms-prompt-turn');
+        // Chỉ bỏ qua N tin nhắn cuối (đang stream / luôn giữ) — các turn còn lại tắt animation để bớt lag
+        const skip = Math.max(0, CONFIG.ACTIVE_EXEMPT_TURNS);
+        let disabled = 0;
+        for (let i = 0; i < allTurns.length - skip; i++) {
+            const turn = allTurns[i];
+            if (turn.dataset.ramOptDeleting) continue;
+            if (turn.dataset.ramOptNoAnim) continue;
+            turn.style.willChange = 'auto';
+            turn.style.contain = 'content';
+            turn.classList.toggle('ram-opt-no-anim', CONFIG.DISABLE_TURN_ANIMATIONS);
+            turn.dataset.ramOptNoAnim = 'true';
+            disabled++;
+        }
+        return disabled;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  4. TIẾN TRÌNH TỐI ƯU — THU GỌN TIN QUÁ DÀI (KHÔNG CHỜ RAM)
+    // ═══════════════════════════════════════════════════════════════
+    let isOptimizing = false;
+    let totalOptimizations = 0;
+
+    // Lõi dọn dẹp: thu gọn ngay những turn QUÁ DÀI + dọn thinking.
+    // KHÔNG còn cắt theo "3 turn mới nhất" → ngữ cảnh hội thoại giữ nguyên.
+    // Không check RAM / DOM threshold, không chờ interval.
+    function enforceOptimize(manual = false) {
+        if (isOptimizing) return null;
+        isOptimizing = true;
+        try {
+            // Không đo getDOMNodeCount() trước/sau nữa (2 lần querySelectorAll('*') full-DOM / lần chạy):
+            // tin freed lấy trực tiếp từ kết quả thinking + thu gọn tin dài.
+            const thinking = CONFIG.AUTO_COLLAPSE_THINKING ? removeThinkingContent() : { stripped: 0, nodesFreed: 0 };
+            const messages = CONFIG.AUTO_VIRTUALIZE ? collapseLongMessages() : { virtualized: 0, nodesFreed: 0 };
+            disableAnimationsOnOldContent();
+            disableSpellcheckOnInputs();
+
+            const savedNodes = (thinking.nodesFreed || 0) + (messages.nodesFreed || 0);
+            if (savedNodes > 0 || manual) {
+                totalOptimizations++;
+                updateMonitorDisplay();
+            }
+            return { savedNodes, thinking, messages };
+        } finally {
+            isOptimizing = false;
+            // Mutation do chính enforce sinh ra (placeholder, xóa thinking, set style...)
+// được deliver ngay sau task này → chặn trong 150ms để observer không tự kích hoạt enforce lần nữa (vòng lặp).
+            ignoreMutationsUntil = Date.now() + 150;
+        }
+    }
+
+    function runOptimize(manual = false) {
+        // Chế độ instant: kể cả đang gõ vẫn thu gọn tin QUÁ DÀI để giảm lag.
+        // Không đụng 2 tin nhắn cuối (luôn giữ để đảm bảo ngữ cảnh); chỉ bỏ qua khi document ẩn (trừ khi manual).
+        if (!manual && document.hidden) return null;
+        return enforceOptimize(manual);
+    }
+
+    function scheduleInstantOptimize() {
+        if (Date.now() < ignoreMutationsUntil) return;
+
+        // Debounce 250nhưng CÓ MAX-WAIT 800ms:
+        // AI stream → mutation liên tục làm clearTimeout lặp lại → pure debounce sẽ KHÔNG BAO GIỜ chạy
+        // cho tới khi stream xong. Max-wait đảm bảo cleanup luôn chạy trong ≤800ms kể từ mutation đầu.
+        const now = Date.now();
+        if (!observerPendingSince) observerPendingSince = now;
+        const delay = Math.min(250, Math.max(0, 800 - (now - observerPendingSince)));
+
+        if (observerDebounce) clearTimeout(observerDebounce);
+        observerDebounce = setTimeout(() => {
+            observerDebounce = null;
+            observerPendingSince = 0;
+            if (!document.hidden) enforceOptimize(false);
+        }, delay);
+    }
+
+    function isOwnUiMutation(m) {
+        const isOwnEl = (n) => n && n.nodeType === 1 && n.matches && n.matches(OPT_OWN_UI);
+
+        if (m.target && m.target.nodeType === 1 && m.target.closest && m.target.closest(OPT_OWN_UI)) {
+            return true;
+        }
+        // childList: skip nếu TẤT CẢ node thêm/rời đều là UI của script (placeholder, nút...)
+        const nodes = [...m.addedNodes, ...m.removedNodes].filter(n => n.nodeType === 1);
+        if (nodes.length > 0 && nodes.every(isOwnEl)) return true;
+        return false;
+    }
+
+    function installChatObserver() {
+        if (chatObserver) return;
+        try {
+            chatObserver = new MutationObserver((mutations) => {
+                if (Date.now() < ignoreMutationsUntil) return;
+                for (const m of mutations) {
+                    // Chỉ quan tâm childList (turn thêm/rời, thinking thêm/rời).
+                    // BỎ attributes (class/style/hidden): Angular đổi class liên tục khi hover/animation
+                    // → scheduler bị reset vô hạn + enforce chạy nền không cần thiết.
+                    if (m.type !== 'childList') continue;
+                    if (isOwnUiMutation(m)) continue;
+                    scheduleInstantOptimize();
+                    return;
+                }
+            });
+            const root = document.documentElement || document.body;
+            chatObserver.observe(root, {
+                childList: true,
+                subtree: true,
+            });
+        } catch (e) {}
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  5. MONITOR UI (GỌN GÀNG)
+    // ═══════════════════════════════════════════════════════════════
+    let monitorEl = null;
+
+    function createMonitor() {
+        if (document.getElementById('ram-opt-monitor')) return;
+        monitorEl = document.createElement('div');
+        monitorEl.id = 'ram-opt-monitor';
+        monitorEl.style.cssText = `
+            position: fixed; bottom: 200px; left: 14px; z-index: 999999;
+            font-family: 'Google Sans', 'Roboto Mono', Consolas, monospace;
+            font-size: 11px; color: #e8eaed; background: rgba(32, 33, 36, 0.95);
+            border: 1px solid rgba(95, 99, 104, 0.6); border-radius: 12px;
+            padding: 0; user-select: none; box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+            overflow: hidden; width: fit-content; max-width: 250px;
+        `;
+
+        const badge = document.createElement('div');
+        badge.id = 'ram-opt-badge';
+        badge.style.cssText = `display: flex; align-items: center; gap: 6px; padding: 6px 12px; cursor: pointer; white-space: nowrap;`;
+        safeSetHTML(badge, `
+            <span id="ram-opt-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #34a853;"></span>
+            <span id="ram-opt-text">⚡ Sẵn sàng</span>
+        `);
+
+        const panel = document.createElement('div');
+        panel.id = 'ram-opt-panel';
+        panel.style.cssText = `display: none; padding: 10px 12px; flex-direction: column; gap: 6px; border-top: 1px solid rgba(95, 99, 104, 0.4); width: 220px;`;
+        safeSetHTML(panel, `
+            <div style="display:flex;justify-content:space-between;"><span style="color:#9aa0a6;">RAM:</span><span id="ram-opt-heap">--</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#9aa0a6;">DOM Nodes:</span><span id="ram-opt-nodes">--</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#9aa0a6;">📌 Đã thu gọn tin dài:</span><span id="ram-opt-collapsed" style="color:#81c995;font-weight:bold;">0</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:#9aa0a6;">⚡ Đã chặn CountTokens:</span><span id="ram-opt-ct-blocked" style="color:#fdd663;font-weight:bold;">0</span></div>
+            <button id="ram-opt-btn-clean" style="margin-top:6px;background:rgba(138,180,248,0.15);border:1px solid #8ab4f8;color:#8ab4f8;border-radius:4px;padding:4px;cursor:pointer;">🧹 Thu gọn tin dài ngay</button>
+        `);
+
+        badge.onclick = () => {
+            panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
+        };
+
+        monitorEl.appendChild(badge);
+        monitorEl.appendChild(panel);
+        (document.body || document.documentElement).appendChild(monitorEl);
+
+        document.getElementById('ram-opt-btn-clean')?.addEventListener('click', () => runOptimize(true));
+    }
+
+    function updateMonitorDisplay() {
+        const textEl = document.getElementById('ram-opt-text');
+        const heapEl = document.getElementById('ram-opt-heap');
+        const nodesEl = document.getElementById('ram-opt-nodes');
+        const collapsedEl = document.getElementById('ram-opt-collapsed');
+        const mem = getMemoryInfo();
+        const nodes = getDOMNodeCount();
+
+        if (textEl) textEl.textContent = `⚡ ${mem ? mem.usedMB + 'MB' : nodes + ' nodes'}`;
+        if (heapEl && mem) heapEl.textContent = `${mem.usedMB} / ${mem.totalMB} MB`;
+        if (nodesEl) nodesEl.textContent = nodes.toLocaleString();
+        if (collapsedEl) collapsedEl.textContent = totalCollapsed.toLocaleString();
+        updateCountTokensStatUI();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  6. KHỞI TẠO VÀ DỌN DẸP
+    // ═══════════════════════════════════════════════════════════════
+    function escapeHTML(str) {
+        // PHẢI escape cả " và ' :
+        // innerHTML serialization (cách cũ) KHÔNG escape quote → preview chứa " thoát khỏi
+        // title="..." → inject attribute (onmouseover...) vào placeholder.
+        return String(str ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function destroy() {
+        if (chatObserver) { try { chatObserver.disconnect(); } catch (e) {} chatObserver = null; }
+        if (observerDebounce) { clearTimeout(observerDebounce); observerDebounce = null; }
+        observerPendingSince = 0;
+        ignoreMutationsUntil = 0;
+        if (safetyNetTimer) { clearInterval(safetyNetTimer); safetyNetTimer = null; }
+        if (onVisibilityChange) { document.removeEventListener('visibilitychange', onVisibilityChange); onVisibilityChange = null; }
+        if (originalFetch && window.fetch !== originalFetch) window.fetch = originalFetch;
+        if (originalMatchMedia) window.matchMedia = originalMatchMedia;
+
+        // Phục hồi tất cả các turn đang thu gọn về DOM nguyên bản
+        for (const [id, data] of virtualizedMessages.entries()) {
+            if (data.turn && data.turn.isConnected) {
+                restoreVirtualizedMessage(data.turn, id);
+            }
+        }
+        virtualizedMessages.clear();
+
+        // DỌN TOÀN BỘ CỜ + UI TẠM trên mọi turn:
+        // nếu không làm, lần chạy script sau (re-inject không F5) thấy state 'restored'/'true'
+        // cũ trong khi Map trống → findMessageIdByTurn null → turn bị bỏ qua vĩnh viễn.
+        document.querySelectorAll('ms-chat-turn, ms-prompt-turn').forEach(t => {
+            delete t.dataset.ramOptVirtualized;
+            delete t.dataset.ramOptUserCollapsed;
+            delete t.dataset.ramOptDeleting;
+            delete t.dataset.ramOptNoAnim;
+            t.classList.remove('ram-opt-no-anim');
+            t.style.contain = '';
+            t.style.willChange = '';
+            t.style.minHeight = '';
+            t.querySelectorAll('.ram-opt-collapse-btn').forEach(b => b.remove());
+            t.querySelectorAll('.ram-opt-msg-placeholder').forEach(p => p.remove());
+        });
+        totalCollapsed = 0;
+
+        document.getElementById('ram-opt-monitor')?.remove();
+        document.getElementById('ram-opt-btn-copy-instant')?.remove();
+        document.getElementById('ram-opt-perf-styles')?.remove();
+        window.__ramOptCtThrottleInstalled = false;
+        window.__ramOptReducedMotionPatched = false;
+    }
+    window.__ramOptimizerDestroy = destroy;
+
+    function init() {
+        if (!document.body && !document.documentElement) {
+            setTimeout(init, 300);
+            return;
+        }
+        injectPerfStyles();
+        createMonitor();
+        ensureInstantCopyBtn();
+        updateMonitorDisplay();
+        installChatObserver();
+
+        // Safety net 30s:.backup nếu observer bị miss (ví dụ Angular thay cả container node
+        // trong cửa sổ 150ms ignore, hoặc mutation duy nhất bị nuốt) — KHÔNG dựa vào RAM/ngưỡng.
+        if (!safetyNetTimer) {
+            safetyNetTimer = setInterval(() => {
+                if (!document.hidden) enforceOptimize(false);
+            }, 30000);
+        }
+        // Quay lại tab sau khi ẩn → dọn ngay (mutation trong lúc ẩn có thể bị bỏ qua)
+        if (!onVisibilityChange) {
+            onVisibilityChange = () => { if (!document.hidden) enforceOptimize(false); };
+            document.addEventListener('visibilitychange', onVisibilityChange);
+        }
+
+        // Chạy ngay 1 lần khi load (không chờ 3s như trước)
+        setTimeout(() => runOptimize(false), 800);
+    }
+
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        setTimeout(init, 500);
+    } else {
+        window.addEventListener('DOMContentLoaded', () => setTimeout(init, 500));
+    }
+
+    // Không dùng interval theo RAM nữa — MutationObserver ở trên sẽ
+    // LUÔN giữ nguyên 2 tin nhắn gần nhất (dù dài), và chỉ thu gọn
+    // những block tin QUÁ DÀI (≥4k ký tự / ≥700 nodes) còn lại → ngữ cảnh không bị mất.
+})();
