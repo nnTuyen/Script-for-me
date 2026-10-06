@@ -9,6 +9,7 @@
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=aistudio.google.com
 // @grant        GM_addStyle
 // @run-at       document-idle
+// @homepageURL  https://github.com/nnTuyen/Script-for-me/blob/main/Clear-chat-Aistudio
 // @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Clear-chat-Aistudio
 // @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Clear-chat-Aistudio
 // ==/UserScript==
