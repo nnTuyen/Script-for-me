@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        Be Vietnam Pro
 // @namespace   http://tampermonkey.net/
-// @version     5.6
+// @version     5.7
 // @description Dùng font Be Vietnam Pro cho mọi trang, không lỗi icon
 // @author      Nguyễn Ngọc Tuyên
 // @match       *://*/*
@@ -13,10 +13,12 @@
 // @exclude     *://claude.ai/*
 // @exclude     *://huarw.com/*
 // @exclude     http://127.0.0.1:8000/*
+// @exclude     http://127.0.0.1:8001/*
 // @exclude     http://localhost:8000/*
 // @exclude     https://datingshow.pages.dev/*
 // @grant       GM_addStyle
 // @run-at      document-start
+// @noframes
 // @downloadURL https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/script_beVNpro_font
 // @updateURL   https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/script_beVNpro_font
 // ==/UserScript==
@@ -25,20 +27,26 @@
     'use strict';
 
     // 1. Preconnect sớm nhất có thể — thiết lập kết nối TCP/TLS trước
+    // fonts.googleapis.com: CSS tải ở chế độ no-CORS → KHÔNG đặt crossorigin
+    // (đặt crossorigin sẽ dùng pool kết nối khác → preconnect bị lãng phí)
     var preconnect1 = document.createElement('link');
     preconnect1.rel = 'preconnect';
     preconnect1.href = 'https://fonts.googleapis.com';
-    preconnect1.crossOrigin = '';
 
+    // fonts.gstatic.com: font tải ở chế độ CORS → bắt buộc có crossorigin
     var preconnect2 = document.createElement('link');
     preconnect2.rel = 'preconnect';
     preconnect2.href = 'https://fonts.gstatic.com';
     preconnect2.crossOrigin = '';
 
-    // 2. Dùng <link> thay vì @import — tải song song, không block render
+    // 2. Tải CSS font KHÔNG chặn render (preload → onload → stylesheet)
+    //    Trang vẽ ngay bằng font hệ thống, CSS tải nền rồi tự áp dụng;
+    //    URL có display=swap nên woff2 cũng không chặn render.
     var fontLink = document.createElement('link');
-    fontLink.rel = 'stylesheet';
+    fontLink.rel = 'preload';
+    fontLink.as = 'style';
     fontLink.href = 'https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:ital,wght@0,100;0,300;0,400;0,500;0,700;1,400&display=swap';
+    fontLink.onload = function() { fontLink.rel = 'stylesheet'; };
 
     // 3. Inject vào <head> hoặc documentElement càng sớm càng tốt
     var target = document.head || document.documentElement;
