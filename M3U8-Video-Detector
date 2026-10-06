@@ -33,6 +33,8 @@
 // @grant        GM.xmlHttpRequest
 // @grant        GM_download
 // @run-at       document-start
+// @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/M3U8-Video-Detector
+// @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/M3U8-Video-Detector
 // ==/UserScript==
 
 // inline m3u8 parser to improve performance and longevity
