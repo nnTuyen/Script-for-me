@@ -19,6 +19,7 @@
 // @grant       GM_addStyle
 // @run-at      document-start
 // @noframes
+// @homepageURL  https://github.com/nnTuyen/Script-for-me/blob/main/script_beVNpro_font
 // @downloadURL https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/script_beVNpro_font
 // @updateURL   https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/script_beVNpro_font
 // ==/UserScript==
