@@ -1,10 +1,10 @@
 // ==UserScript==
-// @name         Google AI Studio | Clear Chat
+// @name         Google AI Studio | Clear Chat (Turbo)
 // @namespace    https://greasyfork.org/en/users/1462137-piknockyou
-// @version      2.6
-// @author       Nguyễn Ngọc Tuyên
+// @version      3.1
+// @author       Nguyễn Ngọc Tuyên (turbo by Antigravity)
 // @license      AGPL-3.0
-// @description  Xóa tất cả chat nhưng giữ lại 3 dòng đầu tiên.
+// @description  Xóa tất cả chat siêu nhanh - tự động khôi phục và xóa sạch cả các ô đã bị nén bởi RAM Optimizer.
 // @match        https://aistudio.google.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=aistudio.google.com
 // @grant        GM_addStyle
@@ -17,15 +17,84 @@
     'use strict';
 
     if (window.self !== window.top) return;
-    console.log("✅ [Clear Chat Script] v3.4 - Tooltip fix xuống dưới...");
+    console.log("⚡ [Clear Chat Script] v3.1 Turbo - Hỗ trợ xóa ô nén RAM Optimizer...");
 
     const MESSAGES_TO_KEEP = 0;
 
-    // Selector quét nút Xóa gốc
-    const CHAT_TURN_OPTIONS_SELECTOR = 'ms-chat-turn-options button, ms-prompt-turn button[aria-label*="More"], button[aria-label="More options"], button.mat-mdc-menu-trigger';
-    const DELETE_BUTTON_MENU_SELECTOR = 'button[role="menuitem"], .mat-mdc-menu-item';
+    // Selectors
+    const CHAT_TURN_SELECTOR = 'ms-chat-turn, ms-prompt-turn, [data-ram-opt-virtualized]';
 
-    // 1. Tooltip (Đã sửa vị trí xuống dưới)
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    // ─── 0. Hỗ trợ tương thích RAM Optimizer ────────────────────────
+    async function ensureTurnRestored(turn) {
+        if (!turn) return false;
+        const isVirtualized = turn.dataset.ramOptVirtualized === 'true' ||
+                              !!turn.querySelector('.ram-opt-btn-restore') ||
+                              !!turn.querySelector('.ram-opt-msg-placeholder');
+        if (isVirtualized) {
+            const restoreBtn = turn.querySelector('.ram-opt-btn-restore');
+            if (restoreBtn) {
+                restoreBtn.click();
+                await sleep(80);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function findOptionButton(turn) {
+        if (!turn) return null;
+
+        // 1. Selector menu của AI Studio (hỗ trợ cả tiếng Anh lẫn tiếng Việt)
+        const optSelectors = [
+            'ms-chat-turn-options button',
+            'ms-prompt-turn button[aria-label*="More"]',
+            'ms-prompt-turn button[aria-label*="Thêm"]',
+            'button[aria-label*="More options"]',
+            'button[aria-label*="Thêm tùy chọn"]',
+            'button.mat-mdc-menu-trigger'
+        ];
+
+        for (const sel of optSelectors) {
+            const btns = turn.querySelectorAll(sel);
+            if (btns.length > 0) {
+                return btns[btns.length - 1];
+            }
+        }
+
+        // 2. Fallback: Quét tất cả button tìm icon hoặc aria liên quan
+        const allBtns = Array.from(turn.querySelectorAll('button, [role="button"]'));
+        const found = allBtns.find(btn => {
+            // Bỏ qua các nút điều khiển do RAM Optimizer gắn vào
+            if (btn.classList.contains('ram-opt-collapse-btn') ||
+                btn.classList.contains('ram-opt-btn-restore') ||
+                btn.classList.contains('ram-opt-btn-delete')) {
+                return false;
+            }
+            const text = (btn.textContent || '').trim();
+            const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+            return text.includes('more_vert') || aria.includes('more') || aria.includes('thêm') || aria.includes('option');
+        });
+
+        return found || null;
+    }
+
+    function findDeleteMenuItem() {
+        const menuSelectors = 'button[role="menuitem"], .mat-mdc-menu-item, [role="menu"] button, .mat-menu-item';
+        const menuItems = document.querySelectorAll(menuSelectors);
+        for (const item of menuItems) {
+            const text = (item.textContent || item.innerText || '').toLowerCase();
+            const aria = (item.getAttribute('aria-label') || '').toLowerCase();
+            if (text.includes('delete') || text.includes('xóa') || text.includes('remove') ||
+                aria.includes('delete') || aria.includes('xóa') || aria.includes('remove')) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    // ─── 1. Tooltip ────────────────────────────────────────────────
     let gccTooltip = null;
     function showTooltip(btn, text) {
         if (!gccTooltip) {
@@ -39,7 +108,7 @@
                 font-family: Roboto, sans-serif;
                 font-size: 11px;
                 color: #e8eaed;
-                z-index: 10000; /* Tăng Z-index để đè lên mọi thứ */
+                z-index: 10000;
                 pointer-events: none;
                 white-space: nowrap;
                 box-shadow: 0 4px 6px rgba(0,0,0,0.5);
@@ -49,17 +118,9 @@
             document.body.appendChild(gccTooltip);
         }
         gccTooltip.textContent = text;
-
-        // Tính toán vị trí
         const rect = btn.getBoundingClientRect();
-        const tooltipWidth = gccTooltip.offsetWidth; // Lấy chiều rộng hiện tại (nếu đã render) hoặc ước lượng
-
-        // Căn giữa theo chiều ngang
         gccTooltip.style.left = `${rect.left + rect.width / 2 - (gccTooltip.offsetWidth / 2)}px`;
-
-        // ĐẶT XUỐNG DƯỚI (Bottom của nút + 6px khoảng cách)
         gccTooltip.style.top = `${rect.bottom + 6}px`;
-
         gccTooltip.style.opacity = '1';
     }
 
@@ -67,59 +128,188 @@
         if (gccTooltip) gccTooltip.style.opacity = '0';
     }
 
-    // 2. Logic xóa nhanh
-    async function deleteMessagesSequentially() {
-        let elements = Array.from(document.querySelectorAll(CHAT_TURN_OPTIONS_SELECTOR));
-        elements = elements.filter(el => el.closest('ms-chat-turn, ms-prompt-turn, .chat-turn, ms-chat-history'));
-
-        if (elements.length <= MESSAGES_TO_KEEP) {
-            const btn = document.getElementById('gemini-cleaner-button');
-            if(btn) {
-                // Rung nhẹ báo lỗi
-                btn.style.transform = 'translateX(2px)';
-                setTimeout(() => btn.style.transform = 'translateX(-2px)', 50);
-                setTimeout(() => btn.style.transform = 'none', 100);
-            }
-            return;
-        }
-
-        if (!confirm(`Xóa ${elements.length - MESSAGES_TO_KEEP} tin nhắn và GIỮ LẠI ${MESSAGES_TO_KEEP} câu đầu?`)) return;
-
-        for (let i = elements.length - 1; i >= MESSAGES_TO_KEEP; i--) {
-            try {
-                let currentElements = Array.from(document.querySelectorAll(CHAT_TURN_OPTIONS_SELECTOR))
-                                           .filter(el => el.closest('ms-chat-turn, ms-prompt-turn, .chat-turn, ms-chat-history'));
-                if (!currentElements[i]) continue;
-
-                currentElements[i].scrollIntoView({ block: 'center', behavior: 'auto' });
-                currentElements[i].click();
-                await new Promise(r => setTimeout(r, 50));
-
-                const menuButtons = document.querySelectorAll(DELETE_BUTTON_MENU_SELECTOR);
-                let deleted = false;
-                for (let btn of menuButtons) {
-                    const text = (btn.textContent || btn.innerText || '').toLowerCase();
-                    if (text.includes('delete') || text.includes('xóa')) {
-                        btn.click();
-                        deleted = true;
-                        break;
-                    }
-                }
-                if(deleted) await new Promise(r => setTimeout(r, 150));
-            } catch (err) { console.error(err); }
+    // ─── 2. Shake animation ────────────────────────────────────────
+    function shakeButton() {
+        const btn = document.getElementById('gemini-cleaner-button');
+        if (btn) {
+            btn.style.transform = 'translateX(2px)';
+            setTimeout(() => btn.style.transform = 'translateX(-2px)', 50);
+            setTimeout(() => btn.style.transform = 'none', 100);
         }
     }
 
-    // 3. Hàm tạo nút
+    // ─── 3. Xóa siêu nhanh ────────────────────────────────────────
+
+    /**
+     * Xóa bằng menu Delete thật của app (bền vững, không hiện lại)
+     * - Tự động phục hồi DOM của ô bị RAM optimizer nén
+     * - Mở menu "More options" của tin cuối → click Delete/Xóa
+     * - Đợi số tin thực sự giảm rồi mới xóa tin kế tiếp
+     */
+    async function waitForTurnCountLessThan(beforeCount, timeoutMs) {
+        const start = performance.now();
+        while (performance.now() - start < timeoutMs) {
+            await sleep(50);
+            const turns = Array.from(document.querySelectorAll(CHAT_TURN_SELECTOR));
+            if (turns.length < beforeCount) return true;
+        }
+        return false;
+    }
+
+    async function optimizedClickDelete() {
+        let deleted = 0;
+        let fails = 0;
+        const MAX_FAILS = 3; // Dừng sau 3 lần thất bại liên tiếp
+
+        while (fails < MAX_FAILS) {
+            const turns = Array.from(document.querySelectorAll(CHAT_TURN_SELECTOR));
+            if (turns.length <= MESSAGES_TO_KEEP) break;
+
+            const lastTurn = turns[turns.length - 1];
+
+            // 1. Phục hồi DOM nếu turn này đang bị nén bởi RAM Optimizer
+            await ensureTurnRestored(lastTurn);
+
+            // 2. Tìm nút "More options" trong turn cuối
+            let optBtn = findOptionButton(lastTurn);
+            if (!optBtn) {
+                // Thử chờ thêm 100ms
+                await sleep(100);
+                optBtn = findOptionButton(lastTurn);
+            }
+
+            if (!optBtn) {
+                console.warn('⚠️ Không tìm thấy nút menu của turn:', lastTurn);
+                fails++;
+                continue;
+            }
+
+            const beforeCount = turns.length;
+
+            // 3. Click mở menu
+            optBtn.click();
+
+            // 4. Tìm và click nút Delete/Xóa trong menu (polling nhanh tới 350ms)
+            let deleteItem = null;
+            const menuStart = performance.now();
+            while (performance.now() - menuStart < 350) {
+                await sleep(40);
+                deleteItem = findDeleteMenuItem();
+                if (deleteItem) break;
+            }
+
+            if (!deleteItem) {
+                // Đóng menu nếu không tìm thấy nút xóa
+                document.body.click();
+                await sleep(60);
+                fails++;
+                continue;
+            }
+
+            deleteItem.click();
+
+            // 5. Đợi app xóa thật sự (số tin giảm) trước khi xóa tin kế tiếp
+            const removed = await waitForTurnCountLessThan(beforeCount, 3000);
+            if (removed) {
+                deleted++;
+                fails = 0;
+            } else {
+                fails++;
+            }
+            await sleep(40);
+        }
+
+        return deleted;
+    }
+
+    /**
+     * HÀM XÓA CHÍNH
+     *
+     * Flow:
+     * 1. Đếm tin nhắn cần xóa (bao gồm cả các ô nén)
+     * 2. Phục hồi trước các ô nén để DOM có đầy đủ nút menu và Angular bindings
+     * 3. Click Delete từng turn qua menu chính thức của Google AI Studio
+     * 4. Đợi app xóa xong từng tin phía server rồi mới xóa tin kế tiếp
+     */
+    let isDeleting = false;
+    async function deleteMessagesFast() {
+        if (isDeleting) return; // Chống click nhiều lần
+        isDeleting = true;
+
+        const cleanerBtn = document.getElementById('gemini-cleaner-button');
+        try {
+            const turns = Array.from(document.querySelectorAll(CHAT_TURN_SELECTOR));
+            const toDelete = turns.slice(MESSAGES_TO_KEEP);
+
+            if (toDelete.length === 0) {
+                shakeButton();
+                return;
+            }
+
+            if (!confirm(`⚡ Xóa nhanh ${toDelete.length} tin nhắn${MESSAGES_TO_KEEP > 0 ? ` (giữ ${MESSAGES_TO_KEEP} tin đầu)` : ''}?`)) return;
+
+            const startTime = performance.now();
+
+            // Visual feedback: đổi màu nút
+            if (cleanerBtn) {
+                cleanerBtn.style.color = '#fbbc04';
+                cleanerBtn.style.animation = 'spin 1s linear infinite';
+            }
+
+            // Phục hồi trước các ô nén trong danh sách cần xóa để sẵn sàng xóa sạch
+            let restoredCount = 0;
+            for (const turn of toDelete) {
+                const restoreBtn = turn.querySelector('.ram-opt-btn-restore');
+                if (restoreBtn) {
+                    restoreBtn.click();
+                    restoredCount++;
+                }
+            }
+            if (restoredCount > 0) {
+                console.log(`⚡ Đã tự động khôi phục ${restoredCount} ô nén RAM Optimizer để xóa sạch.`);
+                await sleep(150);
+            }
+
+            console.log(`⚡ Bắt đầu xóa ${toDelete.length} tin nhắn qua menu Delete...`);
+            const clickDeleted = await optimizedClickDelete();
+            console.log(`   → Đã xóa qua menu: ${clickDeleted} tin`);
+
+            const remaining = Array.from(document.querySelectorAll(CHAT_TURN_SELECTOR)).length;
+            if (remaining > MESSAGES_TO_KEEP) {
+                console.log(`⚠️ Còn ${remaining - MESSAGES_TO_KEEP} tin chưa xóa được.`);
+            }
+
+            const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+            console.log(`✅ Hoàn tất xóa ${toDelete.length} tin nhắn trong ${elapsed}s`);
+
+        } catch (err) {
+            console.error('❌ Lỗi khi xóa:', err);
+        } finally {
+            isDeleting = false;
+            if (cleanerBtn) {
+                cleanerBtn.style.color = '#8e9297';
+                cleanerBtn.style.animation = 'none';
+            }
+        }
+    }
+
+    // ─── 4. CSS animation cho nút xóa ─────────────────────────────
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+    `;
+    document.head.appendChild(style);
+
+    // ─── 5. Tạo nút xóa ──────────────────────────────────────────
     function createIndestructibleSVGButton() {
         if (document.getElementById('gemini-cleaner-button')) return;
 
         const buttons = Array.from(document.querySelectorAll('button'));
-
-        // Tìm nút dấu cộng (+)
         const plusBtn = buttons.find(b => {
             const text = (b.innerText || '').trim();
-            // Nút + thường chứa icon material tên là add_circle hoặc add
             return text === 'add_circle' || text === 'add';
         });
 
@@ -142,7 +332,7 @@
             color: #8e9297 !important;
             background: transparent !important;
             border: none !important;
-            transition: background 0.2s ease !important;
+            transition: background 0.2s ease, color 0.2s ease !important;
             margin-right: 2px !important;
             flex-shrink: 0 !important;
         `;
@@ -158,7 +348,7 @@
         button.onmouseenter = () => {
             button.style.color = '#d93025';
             button.style.background = 'rgba(232, 234, 237, 0.08)';
-            showTooltip(button, `Xóa nhanh (Giữ ${MESSAGES_TO_KEEP} tin đầu)`);
+            showTooltip(button, `⚡ Xóa nhanh (Giữ ${MESSAGES_TO_KEEP} tin đầu)`);
         };
         button.onmouseleave = () => {
             button.style.color = '#8e9297';
@@ -169,10 +359,9 @@
         button.onclick = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            deleteMessagesSequentially();
+            deleteMessagesFast();
         };
 
-        // Chèn trước nút dấu cộng
         targetContainer.insertBefore(button, plusBtn);
     }
 
