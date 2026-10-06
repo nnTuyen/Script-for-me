@@ -33,6 +33,7 @@
 // @grant        GM.xmlHttpRequest
 // @grant        GM_download
 // @run-at       document-start
+// @homepageURL  https://github.com/nnTuyen/Script-for-me/blob/main/M3U8-Video-Detector
 // @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/M3U8-Video-Detector
 // @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/M3U8-Video-Detector
 // ==/UserScript==
