@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google AI Studio | RAM & Typing Lag Optimizer
 // @namespace    https://greasyfork.org/en/users/antigravity
-// @version      3.1
+// @version      3.2
 // @author       Antigravity (Patched)
 // @license      AGPL-3.0
 // @description  Cơ chế MỚI: LUÔN giữ nguyên 2 tin nhắn gần nhất (dù dài hay ngắn) + mọi tin chưa quá dài → không mất ngữ cảnh; chỉ thu gọn những block QUÁ DÀI (file code, đoạn code copy >4k ký tự / >700 node) qua MutationObserver trong ≤800ms. Fix self-loop observer, escape title, race Xóa, state restore.
@@ -207,7 +207,18 @@
     installCountTokensThrottle();
 
     // ═══════════════════════════════════════════════════════════════
-    //  0b. GIẢ LẬP prefers-reduced-motion (BỎ TYPEWRITER DELAY)
+    //  0b. CSS NGAY TẠI document-start — TRƯỚC PAINT ĐẦU TIÊN
+    //  Tắt backdrop-filter (làm mờ GPU) + bỏ scroll-behavior mượt giả lập
+    //  ngay lúc trang chưa render → tin nhắn output ra mượt ngay từ dòng đầu.
+    //  (Như trước đây chỉ gọi trong init() = ~500ms SAU DOMContentLoaded
+    //   → vài paint đầu vẫn chạy blur GPU → cảm giác output bị giật.)
+    //  Lưu ý: script dùng @grant none nên không có GM_addStyle — dùng
+    //  createElement('style') tương đương (cùng content, cùng hiệu lực).
+    // ═══════════════════════════════════════════════════════════════
+    injectPerfStyles();
+
+    // ═══════════════════════════════════════════════════════════════
+    //  0c. GIẢ LẬP prefers-reduced-motion (BỎ TYPEWRITER DELAY)
     // ═══════════════════════════════════════════════════════════════
     function installReducedMotionOverride() {
         if (window.__ramOptReducedMotionPatched) return;
@@ -748,12 +759,21 @@
             style.id = 'ram-opt-perf-styles';
             (document.head || document.documentElement).appendChild(style);
         }
+        // Chạy tại document-start nên lúc đó chưa có <head> → style nằm tạm trong <html>.
+        // Khi <head> đã tồn tại thì chuyển vào (1 lần duy nhất) cho đúng cấu trúc & ổn định.
+        if (document.head && style.parentNode !== document.head) {
+            document.head.appendChild(style);
+        }
 
         style.textContent = `
-            /* [GỘP TỪ SCRIPT 2] Tắt làm mờ GPU & tắt cuộn mượt giả lập */
+            /* [SNIPPET "output mượt"] Tắt làm mờ GPU — giống hệt GM_addStyle của snippet */
             * {
                 backdrop-filter: none !important;
                 -webkit-backdrop-filter: none !important;
+            }
+
+            /* [SNIPPET "output mượt"] Bỏ cuộn mượt giả lập */
+            * {
                 scroll-behavior: auto !important;
             }
 
