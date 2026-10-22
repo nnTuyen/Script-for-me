@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         M3U8 Video Detector and Downloader
 // @name:en      M3U8 Video Detector and Downloader
-// @version      1.5.9
+// @version      1.6.0
 // @description:en  Automatically detect the m3u8 video of the page and download it completely. Once detected the m3u8 link, it will appear in the upper right corner of the page. Click download to jump to the m3u8 downloader.
 // @icon         https://tools.thatwind.com/favicon.png
 // @author       -
 // @namespace    https://tools.thatwind.com/
-// @homepage
+// @homepageurl  https://github.com/nnTuyen/Script-for-me/blob/main/M3U8-Video-Detector
 // @match        *://*soushitv.com/*
 // @match        *://*soushitv.tv/*
 // @match        *://*tvsoushi.com/*
@@ -32,6 +32,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @grant        GM_download
+// @require      https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js
 // @run-at       document-start
 // @homepageURL  https://github.com/nnTuyen/Script-for-me/blob/main/M3U8-Video-Detector
 // @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/M3U8-Video-Detector
@@ -84,7 +85,7 @@
             copyFrom.blur();
             document.body.removeChild(copyFrom);
         },
-        message(text, disappearTime = 5000) {
+        message(text, disappearTime = 2600, type = "success") {
             const id = "f8243rd238-gm-message-panel";
             let p = document.querySelector(`#${id}`);
             if (!p) {
@@ -92,30 +93,61 @@
                 p.id = id;
                 p.style = `
                     position: fixed;
-                    bottom: 20px;
-                    right: 20px;
+                    right: 18px;
+                    bottom: 18px;
                     display: flex;
                     flex-direction: column;
-                    align-items: end;
-                    z-index: 999999999999999;
+                    align-items: flex-end;
+                    gap: 8px;
+                    z-index: 2147483647;
+                    pointer-events: none;
                 `;
                 (document.body || document.documentElement).appendChild(p);
             }
-            let mdiv = document.createElement("div");
-            mdiv.innerText = text;
+
+            const tones = {
+                success: { c: "#34d399", bg: "rgba(52,211,153,.15)", icon: '<path d="M4.5 12.5l5 5 10-11"/>' },
+                info: { c: "#a78bfa", bg: "rgba(167,139,250,.16)", icon: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.01"/>' },
+                download: { c: "#38bdf8", bg: "rgba(56,189,248,.15)", icon: '<path d="M12 3v11m0 0l4-4m-4 4l-4-4M5 20h14"/>' },
+                error: { c: "#f87171", bg: "rgba(248,113,113,.15)", icon: '<circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.4v.01"/>' }
+            };
+            const tone = tones[type] || tones.success;
+            const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+
+            const mdiv = document.createElement("div");
             mdiv.style = `
-                padding: 3px 8px;
-                border-radius: 5px;
-                background: black;
-                box-shadow: #000 1px 2px 5px;
-                margin-top: 10px;
-                font-size: small;
-                color: #fff;
-                text-align: right;
+                display: flex;
+                align-items: center;
+                gap: 9px;
+                max-width: min(340px, calc(100vw - 32px));
+                padding: 9px 13px 9px 10px;
+                border-radius: 12px;
+                background: linear-gradient(180deg, rgba(24,27,39,.97), rgba(15,17,26,.97));
+                border: 1px solid rgba(255,255,255,.12);
+                box-shadow: 0 18px 40px -18px rgba(0,0,0,.9), 0 0 0 1px rgba(0,0,0,.25);
+                color: #eef1f8;
+                font: 500 12px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+                opacity: 0;
+                transform: translateY(8px) scale(.98);
+                transition: opacity .2s ease, transform .2s cubic-bezier(.2,.9,.3,1.1);
+                pointer-events: none;
+            `;
+            mdiv.innerHTML = `
+                <span style="flex:0 0 auto;width:24px;height:24px;border-radius:8px;display:grid;place-items:center;background:${tone.bg};color:${tone.c};">
+                    <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;">${tone.icon}</svg>
+                </span>
+                <span style="min-width:0;">${esc(text)}</span>
             `;
             p.appendChild(mdiv);
+
+            void mdiv.offsetWidth;
+            mdiv.style.opacity = "1";
+            mdiv.style.transform = "translateY(0) scale(1)";
+
             setTimeout(() => {
-                p.removeChild(mdiv);
+                mdiv.style.opacity = "0";
+                mdiv.style.transform = "translateY(6px) scale(.98)";
+                setTimeout(() => mdiv.remove(), 240);
             }, disappearTime);
         }
     };
@@ -192,453 +224,656 @@
         });
     }
 
-    {
-        if (location.href.match(/^.*?socolive.*?$/)) {
-            var sfetch = unsafeWindow.fetch;
-            unsafeWindow.fetch = new Proxy(sfetch, {
-                apply: function(target, thisArg, args) {
-                    let proceed = true;
-                    try {
-                        if (args[0].indexOf(".flv") != -1) doM3U({ url: args[0], content: args[0] });
-                    } catch(ex) { }
-                    return proceed
-                        ? Reflect.apply(target, thisArg, args)
-                        : Promise.resolve(new Response());
-                }
-            });
-        }
-        function bytesToText(buf) {
-            try {
-                if (!buf) return "";
-                if (ArrayBuffer.isView(buf)) buf = buf.buffer;
-                return new TextDecoder("utf-8").decode(buf);
-            } catch (e) {
-                return "";
-            }
-        }
 
-        function getXHRContent(xhr) {
-            try {
-                if (xhr.responseText) return xhr.responseText;
-                if (xhr.response) {
-                    if (typeof xhr.response === "string") return xhr.response;
-                    if (xhr.response instanceof ArrayBuffer) return bytesToText(xhr.response);
-                    if (ArrayBuffer.isView(xhr.response)) return bytesToText(xhr.response.buffer);
-                }
-            } catch (e) { }
-            return "";
-        }
-
-        function extractUrlsFromText(text) {
-            const urls = [];
-            if (!text || typeof text !== "string") return urls;
-            const re = /https?:\/\/[^\s"'<>\\]+?(?:\.m3u8|\.m3u)(?:[?#][^\s"'<>\\]*)?/gi;
-            let m;
-            while ((m = re.exec(text)) !== null) {
-                try {
-                    const u = new URL(m[0], location.href).href;
-                    if (!urls.includes(u)) urls.push(u);
-                } catch (e) { }
-            }
-            return urls;
-        }
-
-        function checkUrl(url) {
-            try {
-                url = new URL(url, location.href);
-                const h = url.href.toLowerCase();
-                return h.indexOf(".m3u8") != -1 || h.indexOf(".m3u?") != -1 || h.indexOf("/m3u8") != -1;
-            } catch (e) {
-                return false;
-            }
-        }
-
-        function checkContent(content) {
-            if (!content) return false;
-            if (typeof content !== "string") content = bytesToText(content);
-            return content.trim().startsWith("#EXTM3U");
-        }
-
-        const _r_text = unsafeWindow.Response.prototype.text;
-        unsafeWindow.Response.prototype.text = function () {
-            const self = this;
-            return _r_text.call(this).then((text) => {
-                if (checkContent(text)) {
-                    doM3U({ url: self.url, content: text });
-                } else if (checkUrl(self.url)) {
-                    doM3U({ url: self.url });
-                }
-                return text;
-            });
-        }
-
-        const _r_ab = unsafeWindow.Response.prototype.arrayBuffer;
-        unsafeWindow.Response.prototype.arrayBuffer = function () {
-            const self = this;
-            return _r_ab.call(this).then((buf) => {
-                try {
-                    const text = bytesToText(buf);
-                    if (checkContent(text)) {
-                        doM3U({ url: self.url, content: text });
-                    } else if (checkUrl(self.url)) {
-                        doM3U({ url: self.url });
-                    }
-                } catch (e) { }
-                return buf;
-            });
-        }
-
-        function isDetailContext(urlStr) {
-            if (location.pathname.includes("/detail/")) return true;
-            if (urlStr && (urlStr.includes("/api/videos/") || urlStr.includes("/detail/"))) return true;
-            return false;
-        }
-
-        const _r_json = unsafeWindow.Response.prototype.json;
-        unsafeWindow.Response.prototype.json = function () {
-            const self = this;
-            return _r_json.call(this).then((data) => {
-                try {
-                    if (self.url && self.url.includes("/api/process-video-url")) {
-                        clearList();
-                    }
-                    if (!isDetailContext(self.url) && data && typeof data === "object") {
-                        const s = JSON.stringify(data);
-                        if (s && s.length < 500000) {
-                            extractUrlsFromText(s).forEach(u => doM3U({ url: u }));
-                        }
-                    }
-                } catch (e) { }
-                return data;
-            });
-        }
-
-        const _open = unsafeWindow.XMLHttpRequest.prototype.open;
-        unsafeWindow.XMLHttpRequest.prototype.open = function (...args) {
-            this.addEventListener("load", () => {
-                try {
-                    if (args[1] && String(args[1]).includes("/api/process-video-url")) {
-                        clearList();
-                    }
-                    const content = getXHRContent(this);
-                    if (content && checkContent(content)) {
-                        doM3U({ url: args[1], content: content });
-                    } else if (checkUrl(args[1])) {
-                        doM3U({ url: args[1] });
-                    } else if (!isDetailContext(args[1]) && content && content.length < 300000 && /^[\s\r\n]*[\[{]/.test(content)) {
-                        extractUrlsFromText(content).forEach(u => doM3U({ url: u }));
-                    }
-                } catch { }
-            });
-            return _open.apply(this, args);
-        }
-
-        function scanDOMForM3U8() {
-            if (location.pathname.includes("/detail/")) return;
-            try {
-                if (!document.body) return;
-                const attrSel = ["data-url", "data-src", "data-m3u8", "data-m3u", "data-video", "data-videourl", "data-video-url", "data-playurl", "data-play-url", "data-file", "data-link", "data-value", "data-json", "href", "src"].map(a => `[${a}]`).join(",");
-                for (const el of document.querySelectorAll(attrSel)) {
-                    for (const attr of el.attributes) {
-                        const v = attr.value;
-                        if (!v || typeof v !== "string" || v.length > 2000) continue;
-                        if (/\.m3u8(?:[?#]|$)|\.m3u(?:[?#]|$)/i.test(v)) {
-                            extractUrlsFromText(v).forEach(u => doM3U({ url: u }));
-                        }
-                    }
-                }
-                for (const s of document.querySelectorAll("script")) {
-                    const t = (s.textContent || "").replace(/\\\//g, "/");
-                    if (t && t.length < 100000 && /\.m3u8|\.m3u(?:[?#]|$)|m3u8/i.test(t)) {
-                        extractUrlsFromText(t).forEach(u => doM3U({ url: u }));
-                    }
-                }
-                for (const e of performance.getEntriesByType("resource")) {
-                    if (e.name && e.name.length < 2000 && /\.m3u8(?:[?#]|$)|\.m3u(?:[?#]|$)/i.test(e.name)) {
-                        extractUrlsFromText(e.name).forEach(u => doM3U({ url: u }));
-                    }
-                }
-            } catch (e) { }
-        }
-
-        setInterval(scanDOMForM3U8, 1200);
-        setInterval(doVideos, 1000);
-    }
 
     const rootDiv = document.createElement("div");
-    rootDiv.style = `
-        position: fixed;
-        z-index: 9999999999999999;
-        opacity: 0.95;
-    `;
+    rootDiv.style = `position: fixed; z-index: 2147483000;`;
     rootDiv.style.display = "block";
-    document.documentElement.appendChild(rootDiv);
 
-    const shadowDOM = rootDiv.attachShadow({ mode: 'open' });
+    // document-start có thể chạy trước khi <html> tồn tại (một số trình quản lý
+    // userscript / trình duyệt). Chờ đến khi có documentElement rồi mới gắn panel,
+    // tránh lỗi "appendChild of null" làm script dừng giữa chừng.
+    function mountRoot(el) {
+        const attach = () => {
+            if (el.isConnected) return;
+            const root = document.documentElement || document.body;
+            if (root) root.appendChild(el);
+        };
+        if (document.documentElement) {
+            attach();
+            return;
+        }
+        const obs = new MutationObserver(() => {
+            if (document.documentElement) {
+                obs.disconnect();
+                attach();
+            }
+        });
+        try { obs.observe(document, { childList: true, subtree: true }); } catch (e) { }
+        document.addEventListener("DOMContentLoaded", () => {
+            obs.disconnect();
+            attach();
+        }, { once: true });
+    }
+    mountRoot(rootDiv);
+
+    const shadowDOM = rootDiv.attachShadow({ mode: "open" });
     const wrapper = document.createElement("div");
+    wrapper.className = "dock";
     shadowDOM.appendChild(wrapper);
 
+    // ==========================================
+    // 🎬 ICON
+    // ==========================================
+    const ICONS = {
+        copy: '<svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+        open: '<svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
+        dl: '<svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+        trash: '<svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>',
+        chev: '<svg class="chev" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>',
+        film: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 5v14M17 5v14M3 10h4M3 14h4M17 10h4M17 14h4"/></svg>',
+        play: '<svg class="ico-play" viewBox="0 0 24 24"><path d="M8 5.2v13.6L19 12z"/></svg>',
+        watch: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor" stroke="none"/></svg>'
+    };
 
     // ==========================================
-    // 🌟 THIẾT KẾ LOGO 3D XOAY CHO SCRIPT (GIỐNG 88LIN VIP)
+    // 🔵 NÚT TRÒN (logo) — kéo để di chuyển, bấm để ẩn/hiện
     // ==========================================
     const bar = document.createElement("div");
-    bar.style = `text-align: right;`;
+    bar.className = "orb-wrap";
     bar.innerHTML = `
-        <div class="number-indicator" data-number="0" title="VIP Video Detector (M3U8/MP4)">
-            <div class="logo-3d-box">
-                <!-- Mặt trước (Front) -->
-                <div class="logo-3d-face front">
-                    <svg class="logo-icon" viewBox="0 0 24 24">
-                        <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/>
-                    </svg>
-                </div>
-                <!-- Mặt sau (Back) -->
-                <div class="logo-3d-face back">
-                    <svg class="logo-icon" viewBox="0 0 24 24">
-                        <path d="M8 5v14l11-7z"/>
-                    </svg>
-                </div>
-            </div>
+        <div class="number-indicator" data-number="0" title="M3U8 Detector — kéo để di chuyển, bấm để ẩn/hiện panel">
+            <span class="orb">${ICONS.play}</span>
         </div>
     `;
-
     wrapper.appendChild(bar);
 
     // ==========================================
-    // 🎨 CSS HIỆU ỨNG 3D XOAY VÀ ÁNH KIM
+    // 🗂️ PANEL
+    // ==========================================
+    const panel = document.createElement("section");
+    panel.className = "panel";
+    panel.innerHTML = `
+        <header class="phead">
+            <span class="live-dot"></span>
+            <span class="ptitle">M3U8 Detector</span>
+            <span class="pcount" data-zero="1">0</span>
+            <span class="spacer"></span>
+            <button type="button" class="icon-btn" data-act="clear" title="Xoá danh sách">${ICONS.trash}</button>
+            <button type="button" class="icon-btn" data-act="collapse" title="Thu gọn / mở panel">${ICONS.chev}</button>
+        </header>
+        <div class="list"></div>
+        <div class="empty">${ICONS.film}<b>Đang chờ video…</b><small>Phát video trên trang để bắt link m3u8 / mp4</small></div>
+    `;
+    wrapper.appendChild(panel);
+
+    const listEl = panel.querySelector(".list");
+    const countEl = panel.querySelector(".pcount");
+    const emptyEl = panel.querySelector(".empty");
+
+    // ==========================================
+    // ▶️ TRÌNH XEM M3U8 TRONG PANEL (hls.js)
+    // ==========================================
+    const viewer = document.createElement("div");
+    viewer.className = "viewer";
+    viewer.innerHTML = `
+        <div class="vbackdrop" data-act="vclose"></div>
+        <div class="vbox" role="dialog" aria-modal="true" aria-label="Xem video">
+            <div class="vhead">
+                <span class="vtitle">Xem video</span>
+                <span class="spacer"></span>
+                <button type="button" class="vbtn" data-act="vext" title="Mở link ở tab mới">${ICONS.open}</button>
+                <button type="button" class="vbtn" data-act="vclose" title="Đóng">✕</button>
+            </div>
+            <div class="vstage">
+                <video controls playsinline></video>
+                <div class="vmsg" hidden>Đang tải video…</div>
+            </div>
+            <div class="vfoot">Không phát được? Bấm ↗ để mở link, hoặc dùng nút Tải trên thẻ.</div>
+        </div>
+    `;
+    shadowDOM.appendChild(viewer);
+
+    const viewerTitle = viewer.querySelector(".vtitle");
+    const viewerVideo = viewer.querySelector("video");
+    const viewerMsg = viewer.querySelector(".vmsg");
+    let viewerHls = null;
+    let viewerUrl = "";
+    const pausedPageVideos = [];
+
+    // ==========================================
+    // 🎨 CSS
     // ==========================================
     const style = document.createElement("style");
+    style.textContent = `
+        .dock, .dock *, .dock *::before, .dock *::after { box-sizing: border-box; }
+        .dock {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+            font-size: 12px;
+            line-height: 1.35;
+            color: #e9ecf6;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 10px;
+            user-select: none;
+            -webkit-font-smoothing: antialiased;
+        }
+        :where(.dock) button { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
+        .dock svg { display: block; flex: 0 0 auto; }
+        .spacer { flex: 1 1 auto; }
 
-    style.innerHTML = `
+        /* ---------- nút tròn ---------- */
+        .orb-wrap { line-height: 0; }
         .number-indicator {
             position: relative;
-            display: inline-flex;
-            justify-content: center;
-            align-items: center;
-            width: 50px;
-            height: 50px;
-            margin-bottom: 6px;
-            margin-right: 8px;
-            cursor: pointer;
-            perspective: 800px;
-            user-select: none;
+            width: 46px;
+            height: 46px;
+            display: grid;
+            place-items: center;
+            cursor: grab;
+            -webkit-tap-highlight-color: transparent;
         }
-
-        /* Badge số đếm video bắt được */
+        .number-indicator:active, .number-indicator.dragging { cursor: grabbing; }
+        .orb {
+            position: relative;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            background:
+                radial-gradient(120% 120% at 30% 20%, rgba(255,255,255,.65), rgba(255,255,255,0) 48%),
+                linear-gradient(135deg, #8b5cf6 0%, #3b82f6 52%, #06b6d4 100%);
+            box-shadow:
+                0 10px 24px -8px rgba(59,130,246,.85),
+                0 2px 6px rgba(0,0,0,.35),
+                inset 0 -4px 10px rgba(0,0,0,.32),
+                inset 0 0 12px rgba(255,255,255,.28);
+            transition: transform .18s ease, box-shadow .18s ease;
+        }
+        .number-indicator:hover .orb {
+            transform: translateY(-1px) scale(1.04);
+            box-shadow:
+                0 14px 28px -8px rgba(59,130,246,.95),
+                0 2px 8px rgba(0,0,0,.4),
+                inset 0 -4px 10px rgba(0,0,0,.3),
+                inset 0 0 14px rgba(255,255,255,.4);
+        }
+        .orb::before {
+            content: "";
+            position: absolute;
+            inset: -4px;
+            border-radius: 50%;
+            padding: 1.5px;
+            background: conic-gradient(from 0deg, rgba(139,92,246,0), rgba(139,92,246,.85), rgba(6,182,212,.85), rgba(139,92,246,0));
+            -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            -webkit-mask-composite: xor;
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask-composite: exclude;
+            opacity: .85;
+            animation: ringSpin 5.5s linear infinite;
+            pointer-events: none;
+        }
+        .number-indicator:hover .orb::before { animation-duration: 2.2s; }
+        @keyframes ringSpin { to { transform: rotate(360deg); } }
+        .ico-play {
+            width: 16px;
+            height: 16px;
+            fill: #fff;
+            margin-left: 2px;
+            filter: drop-shadow(0 1px 2px rgba(0,0,0,.45));
+        }
         .number-indicator::after {
             content: attr(data-number);
             position: absolute;
-            top: -4px;
-            right: -8px;
-            color: #ffffff;
-            font-size: 11px;
+            top: 0;
+            right: -2px;
+            min-width: 17px;
+            height: 17px;
+            padding: 0 4px;
+            border-radius: 10px;
+            display: grid;
+            place-items: center;
+            font-size: 10px;
             font-weight: 800;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: linear-gradient(135deg, #ff0844 0%, #ffb199 100%);
-            border: 2px solid #ffffff;
-            box-shadow: 0 3px 8px rgba(255, 8, 68, 0.45);
-            border-radius: 12px;
-            padding: 1px 6px;
-            min-width: 14px;
-            text-align: center;
-            line-height: 1.3;
+            line-height: 1;
+            color: #fff;
+            background: linear-gradient(135deg, #ff0844 0%, #ff7a45 100%);
+            border: 1.5px solid rgba(255,255,255,.95);
+            box-shadow: 0 3px 10px -2px rgba(255,8,68,.7);
             z-index: 20;
             pointer-events: none;
+            transition: opacity .2s ease, transform .2s ease;
+        }
+        .number-indicator[data-number="0"]::after { opacity: 0; transform: scale(.6); }
+        .number-indicator.ping .orb { animation: orbPing .55s cubic-bezier(.3,1.4,.5,1) 1; }
+        @keyframes orbPing {
+            0% { transform: scale(1); }
+            35% { transform: scale(1.16); }
+            65% { transform: scale(.97); }
+            100% { transform: scale(1); }
         }
 
-        /* Khối quay 3D */
-        .logo-3d-box {
-            width: 44px;
-            height: 44px;
+        /* ---------- panel ---------- */
+        .panel {
+            width: min(340px, calc(100vw - 16px));
+            background: linear-gradient(180deg, rgba(18,20,30,.97), rgba(11,13,20,.97));
+            border: 1px solid rgba(255,255,255,.11);
+            border-radius: 16px;
+            box-shadow: 0 26px 60px -26px rgba(0,0,0,.92), 0 0 0 1px rgba(0,0,0,.3);
+            backdrop-filter: blur(16px) saturate(1.25);
+            -webkit-backdrop-filter: blur(16px) saturate(1.25);
+            overflow: hidden;
+            transform-origin: top right;
+            transition: opacity .18s ease, transform .18s ease, visibility 0s linear 0s;
+        }
+        [data-shown="false"] .panel {
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-8px) scale(.97);
+            pointer-events: none;
+            transition: opacity .16s ease, transform .16s ease, visibility 0s linear .16s;
+        }
+        .phead {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 9px 10px 9px 12px;
+            background: rgba(255,255,255,.025);
+            border-bottom: 1px solid rgba(255,255,255,.07);
+        }
+        .live-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #22d3a7;
+            box-shadow: 0 0 0 3px rgba(34,211,167,.14), 0 0 10px rgba(34,211,167,.85);
+            flex: 0 0 auto;
+        }
+        .ptitle { font-size: 12px; font-weight: 700; letter-spacing: .2px; color: #f2f5fc; white-space: nowrap; }
+        .pcount {
+            font-size: 10px;
+            font-weight: 800;
+            padding: 3px 7px;
+            border-radius: 20px;
+            color: #fff;
+            background: linear-gradient(135deg, #8b5cf6, #3b82f6);
+            box-shadow: 0 3px 10px -3px rgba(99,102,241,.9);
+        }
+        .pcount[data-zero="1"] { background: rgba(255,255,255,.1); color: #9aa3bd; box-shadow: none; }
+        .icon-btn {
+            width: 24px;
+            height: 24px;
+            border-radius: 8px;
+            display: grid;
+            place-items: center;
+            color: #aab2c8;
+            background: rgba(255,255,255,.05);
+            border: 1px solid rgba(255,255,255,.08);
+            transition: background .15s ease, color .15s ease, border-color .15s ease;
+        }
+        .icon-btn:hover { background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.18); }
+        .icon-btn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .icon-btn .chev { transition: transform .2s ease; }
+        [data-shown="false"] .icon-btn .chev { transform: rotate(180deg); }
+
+        .list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 9px;
+            max-height: min(58vh, 440px);
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255,255,255,.22) transparent;
+        }
+        .list::-webkit-scrollbar { width: 8px; }
+        .list::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,.16);
+            border-radius: 8px;
+            border: 2px solid transparent;
+            background-clip: content-box;
+        }
+        .list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.3); background-clip: content-box; }
+        .list:empty { display: none; padding: 0; }
+
+        /* ---------- thẻ video ---------- */
+        .m3u8-item {
             position: relative;
-            transform-style: preserve-3d;
-            animation: spin3D 4.5s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
-            transition: transform 0.3s ease, filter 0.3s ease;
-            filter: drop-shadow(0 6px 14px rgba(124, 58, 237, 0.5));
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+            padding: 9px 10px 9px 13px;
+            border-radius: 12px;
+            background: rgba(255,255,255,.045);
+            border: 1px solid rgba(255,255,255,.08);
+            overflow: hidden;
+            transition: background .16s ease, border-color .16s ease, box-shadow .16s ease;
+            animation: cardIn .26s cubic-bezier(.22,.9,.32,1.08) both;
         }
-
-        .number-indicator:hover .logo-3d-box {
-            animation-duration: 2s;
-            filter: drop-shadow(0 0 18px rgba(0, 223, 216, 0.85));
+        .m3u8-item:hover { background: rgba(255,255,255,.075); border-color: rgba(255,255,255,.16); }
+        .m3u8-item.fresh-on {
+            background: linear-gradient(135deg, rgba(139,92,246,.16), rgba(59,130,246,.08));
+            border-color: rgba(139,92,246,.42);
+            box-shadow: 0 0 22px -10px rgba(139,92,246,.9);
         }
+        @keyframes cardIn {
+            from { opacity: 0; transform: translateY(-8px) scale(.985); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .accent { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent, #8b5cf6); }
+        .m3u8-item[data-tone="4k"] { --accent: #22d3a7; }
+        .m3u8-item[data-tone="fhd"] { --accent: #52c41a; }
+        .m3u8-item[data-tone="hd"] { --accent: #38bdf8; }
+        .m3u8-item[data-tone="sd"] { --accent: #f59e0b; }
+        .m3u8-item[data-tone="low"] { --accent: #94a3b8; }
+        .m3u8-item.is-video { --accent: #06b6d4; }
 
-        /* Hai mặt của logo 3D */
-        .logo-3d-face {
+        .crow { display: flex; align-items: center; gap: 6px; }
+        .type {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 9.5px;
+            font-weight: 700;
+            letter-spacing: .5px;
+            padding: 3px 6px;
+            border-radius: 5px;
+            color: #c4b5fd;
+            background: rgba(139,92,246,.16);
+            border: 1px solid rgba(139,92,246,.32);
+        }
+        .m3u8-item.is-video .type { color: #7dd3fc; background: rgba(6,182,212,.14); border-color: rgba(6,182,212,.3); }
+        .res-badge {
+            font-size: 9.5px;
+            font-weight: 800;
+            letter-spacing: .3px;
+            padding: 3px 6px;
+            border-radius: 5px;
+            color: #06180b;
+            background: #52c41a;
+        }
+        .res-badge[data-tone="4k"] { background: #22d3a7; color: #03130e; }
+        .res-badge[data-tone="hd"] { background: #38bdf8; color: #04121c; }
+        .res-badge[data-tone="sd"] { background: #f59e0b; color: #1c1203; }
+        .res-badge[data-tone="low"] { background: #94a3b8; color: #0b1220; }
+        .fresh {
+            display: none;
+            font-size: 8.5px;
+            font-weight: 800;
+            letter-spacing: .5px;
+            padding: 3px 6px;
+            border-radius: 20px;
+            color: #5eead4;
+            background: rgba(34,211,167,.16);
+            border: 1px solid rgba(34,211,167,.35);
+        }
+        .m3u8-item.fresh-on .fresh { display: inline-flex; }
+        .duration-text {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 10.5px;
+            font-weight: 600;
+            color: #98a1b8;
+            white-space: nowrap;
+        }
+        .file {
+            display: block;
+            width: 100%;
+            text-align: left;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 11.5px;
+            font-weight: 600;
+            color: #e3e8f5;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            border-radius: 4px;
+        }
+        .file:hover { color: #fff; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: rgba(255,255,255,.35); }
+
+        .actions { display: flex; align-items: center; gap: 6px; }
+        .abtn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            height: 26px;
+            padding: 0 10px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            color: #d7dcea;
+            background: rgba(255,255,255,.06);
+            border: 1px solid rgba(255,255,255,.09);
+            transition: background .15s ease, border-color .15s ease, color .15s ease, transform .08s ease;
+        }
+        .abtn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .abtn:hover { background: rgba(255,255,255,.13); border-color: rgba(255,255,255,.2); color: #fff; }
+        .abtn:active { transform: scale(.97); }
+        .abtn.primary {
+            margin-left: auto;
+            color: #fff;
+            border-color: transparent;
+            background: linear-gradient(135deg, #8b5cf6, #3b82f6);
+            box-shadow: 0 6px 16px -8px rgba(99,102,241,1);
+        }
+        .abtn.primary:hover { background: linear-gradient(135deg, #9d6bff, #4b8dff); }
+
+        .empty {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            padding: 22px 16px 24px;
+            text-align: center;
+            color: #7c859b;
+        }
+        .empty svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; opacity: .8; }
+        .empty b { font-size: 12px; font-weight: 600; color: #b7bed2; }
+        .empty small { font-size: 10.5px; }
+
+        /* ---------- trình xem m3u8 ---------- */
+        .viewer {
+            position: fixed;
+            inset: 0;
+            z-index: 2147483001;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 18px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+        }
+        .viewer.open { display: flex; }
+        .vbackdrop {
             position: absolute;
             inset: 0;
-            border-radius: 50%;
+            background: rgba(3,5,10,.78);
+            backdrop-filter: blur(7px);
+            -webkit-backdrop-filter: blur(7px);
+        }
+        .vbox {
+            position: relative;
+            width: min(960px, 94vw);
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            background: linear-gradient(180deg, rgba(18,20,30,.99), rgba(9,11,18,.99));
+            border: 1px solid rgba(255,255,255,.13);
+            border-radius: 16px;
+            box-shadow: 0 30px 80px -20px rgba(0,0,0,.95), 0 0 0 1px rgba(0,0,0,.4);
+            overflow: hidden;
+        }
+        .vhead {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px 8px 14px;
+            border-bottom: 1px solid rgba(255,255,255,.07);
+            background: rgba(255,255,255,.025);
+        }
+        .vtitle {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 12px;
+            font-weight: 700;
+            color: #f2f5fc;
+        }
+        .vbtn {
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            display: grid;
+            place-items: center;
+            color: #aab2c8;
+            background: rgba(255,255,255,.06);
+            border: 1px solid rgba(255,255,255,.1);
+            cursor: pointer;
+            transition: background .15s ease, color .15s ease, border-color .15s ease;
+        }
+        .vbtn:hover { background: rgba(255,255,255,.13); color: #fff; border-color: rgba(255,255,255,.2); }
+        .vbtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .vstage {
+            position: relative;
+            background: #000;
+            aspect-ratio: 16 / 9;
+            max-height: calc(90vh - 92px);
+        }
+        .vstage video { width: 100%; height: 100%; display: block; background: #000; }
+        .vmsg {
+            position: absolute;
+            inset: 0;
             display: flex;
             align-items: center;
             justify-content: center;
-            backface-visibility: hidden;
-            border: 1.5px solid rgba(255, 255, 255, 0.85);
-            box-shadow:
-                inset 0 0 10px rgba(255, 255, 255, 0.6),
-                inset 0 -4px 8px rgba(0, 0, 0, 0.4),
-                0 0 12px rgba(138, 43, 226, 0.5);
-            overflow: hidden;
-        }
-
-        /* Mặt trước: VIP Gradient */
-        .logo-3d-face.front {
-            background: linear-gradient(135deg, #8b5cf6 0%, #3b82f6 50%, #06b6d4 100%);
-        }
-
-        /* Mặt sau: Play Gradient */
-        .logo-3d-face.back {
-            transform: rotateY(180deg);
-            background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 50%, #3b82f6 100%);
-        }
-
-        /* Hiệu ứng quét sáng lấp lánh (Shine light) */
-        .logo-3d-face::after {
-            content: '';
-            position: absolute;
-            top: -60%;
-            left: -60%;
-            width: 220%;
-            height: 220%;
-            background: linear-gradient(
-                45deg,
-                transparent 40%,
-                rgba(255, 255, 255, 0.65) 50%,
-                transparent 60%
-            );
-            animation: shineSweep 3.5s infinite ease-in-out;
-        }
-
-        .logo-icon {
-            width: 22px;
-            height: 22px;
-            fill: #ffffff;
-            filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.45));
-            z-index: 2;
-        }
-
-        /* Keyframes chuyển động 3D xoay vòng mượt mà */
-        @keyframes spin3D {
-            0% {
-                transform: rotateY(0deg) rotateX(12deg);
-            }
-            50% {
-                transform: rotateY(180deg) rotateX(-12deg);
-            }
-            100% {
-                transform: rotateY(360deg) rotateX(12deg);
-            }
-        }
-
-        @keyframes shineSweep {
-            0% {
-                transform: translateX(-100%) translateY(-100%);
-            }
-            100% {
-                transform: translateX(100%) translateY(100%);
-            }
-        }
-
-        .copy-link:link{
-            text-decoration: none;
-        }
-
-        .copy-link:hover{
-            text-decoration: underline;
-        }
-
-        .download-btn:hover{
-            text-decoration: underline;
-        }
-        .download-btn:active{
-            opacity: 0.9;
-        }
-
-        .m3u8-item{
-            color: white;
-            margin-bottom: 5px;
-            display: flex;
-            flex-direction: row;
-            align-items: baseline;
-            background: rgba(15, 15, 20, 0.92);
-            backdrop-filter: blur(8px);
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            padding: 4px 10px;
-            border-radius: 6px;
+            padding: 22px;
+            text-align: center;
             font-size: 12px;
-            user-select: none;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            line-height: 1.5;
+            color: #ccd3e3;
+            background: rgba(3,5,10,.62);
+            pointer-events: none;
+        }
+        .vmsg[hidden] { display: none; }
+        .vfoot {
+            padding: 7px 12px 9px;
+            border-top: 1px solid rgba(255,255,255,.06);
+            font-size: 10px;
+            color: #7f8aa3;
+        }
+        @media (max-width: 640px) {
+            .viewer { padding: 8px; }
+            .vbox { width: 100%; }
+            .vfoot { display: none; }
         }
 
-        [data-shown="false"] {
-            opacity: 0.85;
-            zoom: 0.85;
-        }
-
-        [data-shown="false"]:hover{
-            opacity: 1;
-        }
-
-        [data-shown="false"] .m3u8-item{
-            display: none;
+        @media (prefers-reduced-motion: reduce) {
+            .dock *, .dock *::before, .dock *::after { animation-duration: .001s !important; transition-duration: .001s !important; }
         }
     `;
-
     wrapper.appendChild(style);
 
+    // ==========================================
+    // ⚙️ TRẠNG THÁI + ĐIỀU KHIỂN
+    // ==========================================
+    let shown = true;
+    let posX = 10;
+    let posY = 10;
+
+    function applyShown(v) {
+        shown = !!v;
+        wrapper.setAttribute("data-shown", shown ? "true" : "false");
+        mgmapi.setValue("shown", shown);
+    }
+
+    function setCount(n) {
+        count = n;
+        const ind = bar.querySelector(".number-indicator");
+        if (ind) {
+            ind.setAttribute("data-number", String(n));
+            ind.classList.remove("ping");
+            void ind.offsetWidth;
+            if (n > 0) ind.classList.add("ping");
+        }
+        if (countEl) {
+            countEl.textContent = String(n);
+            countEl.dataset.zero = n > 0 ? "0" : "1";
+        }
+        if (emptyEl) emptyEl.style.display = n > 0 ? "none" : "flex";
+    }
+
+    panel.querySelector('[data-act="clear"]').addEventListener("click", () => {
+        clearList();
+        mgmapi.message("Đã xoá danh sách", 1800);
+    });
+
+    panel.querySelector('[data-act="collapse"]').addEventListener("click", () => {
+        applyShown(!shown);
+    });
 
     const barBtn = bar.querySelector(".number-indicator");
 
-    (async function () {
-        let shown = await GM_getValue("shown", true);
-        wrapper.setAttribute("data-shown", shown);
+    barBtn.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const startX = e.pageX;
+        const startY = e.pageY;
+        let moved = false;
 
-        let x = await GM_getValue("x", 10);
-        let y = await GM_getValue("y", 10);
-
-        x = Math.min(innerWidth - 50, x);
-        y = Math.min(innerHeight - 50, y);
-
-        if (x < 0) x = 0;
-        if (y < 0) y = 0;
-
-        rootDiv.style.top = `${y}px`;
-        rootDiv.style.right = `${x}px`;
-
-        barBtn.addEventListener("mousedown", e => {
-            let startX = e.pageX;
-            let startY = e.pageY;
-            let moved = false;
-
-            let mousemove = e => {
-                let offsetX = e.pageX - startX;
-                let offsetY = e.pageY - startY;
-                if (moved || (Math.abs(offsetX) + Math.abs(offsetY)) > 5) {
-                    moved = true;
-                    rootDiv.style.top = `${y + offsetY}px`;
-                    rootDiv.style.right = `${x - offsetX}px`;
-                }
-            };
-            let mouseup = e => {
-                let offsetX = e.pageX - startX;
-                let offsetY = e.pageY - startY;
-
-                if (moved) {
-                    x -= offsetX;
-                    y += offsetY;
-                    mgmapi.setValue("x", x);
-                    mgmapi.setValue("y", y);
-                } else {
-                    shown = !shown;
-                    mgmapi.setValue("shown", shown);
-                    wrapper.setAttribute("data-shown", shown);
-                }
-
-                removeEventListener("mousemove", mousemove);
-                removeEventListener("mouseup", mouseup);
+        const onMove = (ev) => {
+            const dx = ev.pageX - startX;
+            const dy = ev.pageY - startY;
+            if (!moved && Math.abs(dx) + Math.abs(dy) > 4) {
+                moved = true;
+                barBtn.classList.add("dragging");
             }
-            addEventListener("mousemove", mousemove);
-            addEventListener("mouseup", mouseup);
-        });
+            if (moved) {
+                rootDiv.style.top = `${posY + dy}px`;
+                rootDiv.style.right = `${posX - dx}px`;
+            }
+        };
+
+        const onUp = (ev) => {
+            const dx = ev.pageX - startX;
+            const dy = ev.pageY - startY;
+            barBtn.classList.remove("dragging");
+            removeEventListener("mousemove", onMove);
+            removeEventListener("mouseup", onUp);
+
+            if (moved) {
+                posX = Math.max(0, Math.min(innerWidth - 56, posX - dx));
+                posY = Math.max(0, Math.min(innerHeight - 56, posY + dy));
+                rootDiv.style.top = `${posY}px`;
+                rootDiv.style.right = `${posX}px`;
+                mgmapi.setValue("x", posX);
+                mgmapi.setValue("y", posY);
+            } else {
+                applyShown(!shown);
+            }
+        };
+
+        addEventListener("mousemove", onMove);
+        addEventListener("mouseup", onUp);
+    });
+
+    (async function () {
+        let s = true;
+        let x = 10;
+        let y = 10;
+        try {
+            s = await mgmapi.getValue("shown", true);
+            x = await mgmapi.getValue("x", 10);
+            y = await mgmapi.getValue("y", 10);
+        } catch (e) { }
+
+        shown = s !== false;
+        wrapper.setAttribute("data-shown", shown ? "true" : "false");
+
+        posX = Math.max(0, Math.min(innerWidth - 56, Number(x) || 0));
+        posY = Math.max(0, Math.min(innerHeight - 56, Number(y) || 0));
+        rootDiv.style.top = `${posY}px`;
+        rootDiv.style.right = `${posX}px`;
     })();
 
     let count = 0;
@@ -651,6 +886,7 @@
     const onlyShowTimedM3u8 = /(^|\.)fktv\.me$/i.test(location.hostname);
 
     function clearList() {
+        closeViewer();
         count = 0;
         shownUrls.length = 0;
         masterPaths.length = 0;
@@ -664,9 +900,7 @@
             }
             delete shownItems[href];
         }
-        if (typeof bar !== "undefined" && bar && bar.querySelector(".number-indicator")) {
-            bar.querySelector(".number-indicator").setAttribute("data-number", "0");
-        }
+        setCount(0);
     }
 
     let lastHref = location.href;
@@ -711,7 +945,7 @@
     }
 
     function formatDuration(totalSeconds) {
-        if (!totalSeconds || isNaN(totalSeconds) || totalSeconds <= 0) return "未知(unknown)";
+        if (!totalSeconds || isNaN(totalSeconds) || totalSeconds <= 0) return "—";
         const h = Math.floor(totalSeconds / 3600);
         const m = Math.floor((totalSeconds % 3600) / 60);
         const s = Math.floor(totalSeconds % 60);
@@ -738,18 +972,20 @@
 
     function setResBadge(itemEl, resText) {
         if (!itemEl || !resText) return;
-        let badge = itemEl.querySelector(".res-badge");
-        if (badge) {
-            badge.textContent = resText;
-            badge.style.display = "inline-block";
-            if (/1080|2160|4k/i.test(resText)) {
-                badge.style.background = "#52c41a";
-            } else if (/720|hd/i.test(resText)) {
-                badge.style.background = "#1890ff";
-            } else {
-                badge.style.background = "#fa8c16";
-            }
-        }
+        const badge = itemEl.querySelector(".res-badge");
+        if (!badge) return;
+        badge.textContent = resText;
+        badge.style.display = "inline-block";
+
+        let tone = "fhd";
+        if (/4k|2160/i.test(resText)) tone = "4k";
+        else if (/1080|fhd/i.test(resText)) tone = "fhd";
+        else if (/720|hd/i.test(resText)) tone = "hd";
+        else if (/480/i.test(resText)) tone = "sd";
+        else if (/360|sd|240/i.test(resText)) tone = "low";
+
+        badge.setAttribute("data-tone", tone);
+        itemEl.setAttribute("data-tone", tone);
     }
 
     async function probeSegmentBitrate(segUrl, duration) {
@@ -907,7 +1143,7 @@
                 if (count > 0) count--;
             }
         }
-        bar.querySelector(".number-indicator").setAttribute("data-number", count);
+        setCount(count);
     }
 
     async function playlistHasDuration(url, content, visited = new Set()) {
@@ -970,14 +1206,9 @@
             type: "m3u8",
             url,
             duration: "…",
-            async download() {
-                mgmapi.openInTab(
-                    `https://tools.thatwind.com/tool/m3u8downloader#${new URLSearchParams({
-                        m3u8: url.href,
-                        referer: location.href,
-                        filename: (await getTopTitle()) || ""
-                    })}`
-                );
+            download() {
+                // mở N_m3u8DL-RE.exe qua giao thức nm3u8dl:// (xem C:\Tools\nm3u8dl-launch.vbs)
+                launchTool(url);
             }
         });
 
@@ -992,7 +1223,7 @@
                 parser.end();
                 const manifest = parser.manifest;
 
-                let duration = "未知(unknown)";
+                let duration = "—";
 
                 if (manifest.segments && manifest.segments.length > 0) {
                     let totalSec = 0;
@@ -1072,7 +1303,7 @@
                         } catch (e) { }
                     }
 
-                    if (duration === "未知(unknown)") {
+                    if (duration === "—") {
                         duration = `Multi(${manifest.playlists.length})`;
                     }
                 }
@@ -1083,61 +1314,472 @@
         }
     }
 
+    // ==========================================
+    // 🔗 TIỆN ÍCH: tên file, lệnh tải, mở N_m3u8DL-RE
+    // ==========================================
+    const TOOL_SCHEME = "nm3u8dl";                 // giao thức đã đăng ký trong Windows
+    const TOOL_EXE = "C:\\Tools\\N_m3u8DL-RE.exe"; // chỉ để hiện trong tooltip
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    function sanitizeName(s) {
+        return String(s || "")
+            .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 80);
+    }
+
+    function shortPageTitle() {
+        const t = sanitizeName(document.title || "");
+        const first = t.split(/\s+[-|–—]\s+/)[0].trim();
+        return (first || t).slice(0, 80);
+    }
+
+    function displayNameOf(url) {
+        try {
+            const segs = url.pathname.split("/").filter(Boolean);
+            if (!segs.length) return url.hostname;
+
+            const lastRaw = segs[segs.length - 1];
+            const last = decodeURIComponent(lastRaw) || lastRaw;
+            const generic = /^(index|playlist|master|main|media|manifest|video|stream|prog_index|chunklist|mono|audio)\.(m3u8|m3u|mpd|ts)$/i.test(last);
+            const hashLike = /^[0-9a-f]{12,}$/i.test(last);
+
+            if ((generic || hashLike) && segs.length > 1) {
+                const parent = decodeURIComponent(segs[segs.length - 2]) || segs[segs.length - 2];
+                return parent + "/" + last;
+            }
+            return last;
+        } catch (e) {
+            return url.hostname;
+        }
+    }
+
+    function toolUrlFor(url) {
+        const enc = encodeURIComponent;
+        const parts = [
+            "u=" + enc(url.href),
+            "n=" + enc(sanitizeName(document.title || "")),
+            "r=" + enc(location.href),
+            "o=" + enc(location.origin),
+            "a=" + enc(navigator.userAgent || ""),
+            "c=" + enc((document.cookie || "").slice(0, 3000))
+        ];
+        return `${TOOL_SCHEME}://go?${parts.join("&")}`;
+    }
+
+    function launchTool(url) {
+        const a = document.createElement("a");
+        a.href = toolUrlFor(url);
+        a.style.display = "none";
+        (document.body || document.documentElement).appendChild(a);
+        a.click();
+        setTimeout(() => a.remove(), 0);
+        mgmapi.message("Đang mở N_m3u8DL-RE…", 3500, "download");
+    }
+
+    // ==========================================
+    // ▶️ XEM M3U8 TRONG PANEL: Chrome không phát trực tiếp link .m3u8,
+    //    nên dùng hls.js (nếu có) để xem ngay mà không cần tải trước.
+    // ==========================================
+    function showViewerMessage(text) {
+        if (text) {
+            viewerMsg.textContent = text;
+            viewerMsg.hidden = false;
+        } else {
+            viewerMsg.hidden = true;
+        }
+    }
+
+    function closeViewer() {
+        viewer.classList.remove("open");
+        viewerVideo.onloadeddata = null;
+        viewerVideo.onerror = null;
+        if (viewerHls) {
+            try { viewerHls.destroy(); } catch (e) { }
+            viewerHls = null;
+        }
+        try {
+            viewerVideo.pause();
+            viewerVideo.removeAttribute("src");
+            viewerVideo.load();
+        } catch (e) { }
+        viewerUrl = "";
+        showViewerMessage("");
+        pausedPageVideos.forEach((v) => {
+            try { v.play().catch(() => { }); } catch (e) { }
+        });
+        pausedPageVideos.length = 0;
+    }
+
+    function openViewer(url, label) {
+        const href = url.href;
+        viewerUrl = href;
+        viewerTitle.textContent = label || displayNameOf(url);
+        const wasOpen = viewer.classList.contains("open");
+        viewer.classList.add("open");
+        if (!wasOpen) {
+            pausedPageVideos.length = 0;
+            document.querySelectorAll("video").forEach((v) => {
+                if (!v.paused) {
+                    pausedPageVideos.push(v);
+                    try { v.pause(); } catch (e) { }
+                }
+            });
+        }
+        showViewerMessage("Đang tải video…");
+
+        viewerVideo.onloadeddata = null;
+        viewerVideo.onerror = null;
+
+        if (viewerHls) {
+            try { viewerHls.destroy(); } catch (e) { }
+            viewerHls = null;
+        }
+        try {
+            viewerVideo.pause();
+            viewerVideo.removeAttribute("src");
+            viewerVideo.load();
+        } catch (e) { }
+
+        viewerVideo.onloadeddata = () => {
+            if (viewerUrl === href) showViewerMessage("");
+        };
+        viewerVideo.onerror = () => {
+            // load() sau khi xoá src cũng bắn error code 4 — bỏ qua trường hợp đó.
+            if (viewerUrl !== href || viewerHls) return;
+            if (!viewerVideo.getAttribute("src")) return;
+            showViewerMessage("Không phát được video này. Bấm ↗ để mở link hoặc dùng nút Tải.");
+        };
+
+        // MP4/WebM: trình duyệt phát trực tiếp.
+        if (/\.(mp4|webm|ogg|ogv|mov|m4v)(?:[?#]|$)/i.test(url.pathname)) {
+            viewerVideo.src = href;
+            viewerVideo.play().catch(() => { });
+            return;
+        }
+
+        // Chrome/Edge/Firefox: dùng hls.js do @require nạp sẵn.
+        if (typeof Hls !== "undefined" && Hls.isSupported()) {
+            const hls = new Hls({ lowLatencyMode: false });
+            viewerHls = hls;
+            hls.on(Hls.Events.ERROR, (event, data) => {
+                if (!data || !data.fatal) return;
+                if (viewerHls !== hls) return;
+                showViewerMessage("Không phát được video trong panel. Bấm ↗ để mở link hoặc dùng nút Tải.");
+                try { hls.destroy(); } catch (e) { }
+                viewerHls = null;
+            });
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                if (viewerHls !== hls) return;
+                showViewerMessage("");
+                viewerVideo.play().catch(() => { });
+            });
+            hls.loadSource(href);
+            hls.attachMedia(viewerVideo);
+            return;
+        }
+
+        // Safari/iOS (không có MSE/hls.js) có HLS gốc.
+        if (viewerVideo.canPlayType("application/vnd.apple.mpegurl")) {
+            viewerVideo.src = href;
+            viewerVideo.play().catch(() => { });
+            return;
+        }
+
+        showViewerMessage("Trình duyệt chưa hỗ trợ HLS trong panel. Bấm ↗ để mở link hoặc dùng nút Tải.");
+    }
+
+    viewer.querySelectorAll('[data-act="vclose"]').forEach((el) => {
+        el.addEventListener("click", closeViewer);
+    });
+    viewer.querySelector('[data-act="vext"]').addEventListener("click", () => {
+        if (!viewerUrl) return;
+        try {
+            mgmapi.openInTab(viewerUrl);
+        } catch (e) {
+            window.open(viewerUrl, "_blank", "noopener");
+        }
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && viewer.classList.contains("open")) closeViewer();
+    });
+
+    // ==========================================
+    // 🎴 THẺ VIDEO: copy link · xem/mở · tải bằng N_m3u8DL-RE
+    // ==========================================
     async function showVideo({
         type,
         url,
         duration,
         download
     }) {
-        let div = document.createElement("div");
-        div.className = "m3u8-item";
-        div.setAttribute("data-href", url.href);
-        div.innerHTML = `
-            <span>${type}</span>
-            <span class="res-badge" style="display:none; padding:1px 5px; border-radius:3px; font-weight:bold; margin-left:6px; font-size:11px; color:white;"></span>
-            <a class="copy-link" href="${url.href}" title="${url}" style="
-                color: white;
-                max-width: 200px;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                overflow: hidden;
-                margin-left: 10px;
-                cursor:pointer;"
-            target="_blank" >${url.pathname}</a>
-            <span
-                class="duration-text"
-                style="
-                    margin-left: 10px;
-                    flex-grow: 1;
-                "
-            >${duration}</span>
-            <span
-                class="download-btn"
-                style="
-                    margin-left: 10px;
-                    cursor: pointer;
-            ">⯆</span>
+        const card = document.createElement("div");
+        card.className = "m3u8-item" + (type === "video" ? " is-video" : "");
+        card.setAttribute("data-href", url.href);
+
+        const isVideo = type === "video";
+        const rawName = displayNameOf(url);
+        const hashName = /(?:^|\/)[0-9a-f]{24,}(?:\.m3u8)?$/i.test(rawName);
+        const name = (!isVideo && hashName && shortPageTitle()) ? shortPageTitle() : rawName;
+        const label = isVideo ? "MP4" : "M3U8";
+        const dlTitle = isVideo ? "Tải file này" : `Tải bằng N_m3u8DL-RE (${TOOL_EXE})`;
+        const openLabel = isVideo ? "Mở" : "Xem";
+        const openTitle = isVideo ? "Mở link ở tab mới" : "Xem video trong panel";
+        const openIcon = isVideo ? ICONS.open : ICONS.watch;
+
+        card.innerHTML = `
+            <span class="accent"></span>
+            <div class="crow">
+                <span class="type">${label}</span>
+                <span class="res-badge" style="display:none"></span>
+                <span class="fresh">MỚI</span>
+                <span class="spacer"></span>
+                <span class="duration-text">${escapeHtml(duration)}</span>
+            </div>
+            <button type="button" class="file" title="${escapeHtml(url.href)}">${escapeHtml(name)}</button>
+            <div class="actions">
+                <button type="button" class="abtn" data-act="copy" title="Copy link">${ICONS.copy}<span>Copy link</span></button>
+                <button type="button" class="abtn" data-act="open" title="${escapeHtml(openTitle)}">${openIcon}<span>${openLabel}</span></button>
+                <button type="button" class="abtn primary" data-act="dl" title="${escapeHtml(dlTitle)}">${ICONS.dl}<span>Tải</span></button>
+            </div>
         `;
 
-        div.querySelector(".copy-link").addEventListener("click", () => {
+        card.querySelector(".file").addEventListener("click", () => {
             mgmapi.copyText(url.href);
-            mgmapi.message("已复制链接 (link copied)", 2000);
+            mgmapi.message("Đã copy link", 1800);
         });
 
-        div.querySelector(".download-btn").addEventListener("click", download);
+        card.querySelector('[data-act="copy"]').addEventListener("click", () => {
+            mgmapi.copyText(url.href);
+            mgmapi.message("Đã copy link", 1800);
+        });
+
+        card.querySelector('[data-act="open"]').addEventListener("click", () => {
+            if (!isVideo) {
+                openViewer(url, shortPageTitle() || name);
+                return;
+            }
+            try {
+                mgmapi.openInTab(url.href);
+            } catch (e) {
+                window.open(url.href, "_blank", "noopener");
+            }
+        });
+
+        card.querySelector('[data-act="dl"]').addEventListener("click", () => {
+            try {
+                download();
+            } catch (e) {
+                mgmapi.message("Không mở được N_m3u8DL-RE", 4000, "error");
+            }
+        });
+
+        Array.from(listEl.querySelectorAll(".m3u8-item")).forEach((el) => el.classList.remove("fresh-on"));
+        card.classList.add("fresh-on");
+
+        listEl.prepend(card);
+        listEl.scrollTop = 0;
 
         rootDiv.style.display = "block";
 
         count++;
-
         shownUrls.push(url.href);
-        shownItems[url.href] = div;
+        shownItems[url.href] = card;
+        setCount(count);
 
-        bar.querySelector(".number-indicator").setAttribute("data-number", count);
-
-        wrapper.appendChild(div);
-
-        return div;
+        return card;
     }
 
+
+    // Gọi doM3U an toàn: lỗi khi dò không được làm reject promise của trang
+    // (nếu không, player/HLS của trang có thể dừng giữa chừng).
+    function detect(args) {
+        try {
+            const p = doM3U(args);
+            if (p && typeof p.catch === "function") p.catch(() => { });
+        } catch (e) { }
+    }
+
+    {
+        if (location.href.match(/^.*?socolive.*?$/)) {
+            var sfetch = unsafeWindow.fetch;
+            unsafeWindow.fetch = new Proxy(sfetch, {
+                apply: function(target, thisArg, args) {
+                    let proceed = true;
+                    try {
+                        if (args[0].indexOf(".flv") != -1) detect({ url: args[0], content: args[0] });
+                    } catch(ex) { }
+                    return proceed
+                        ? Reflect.apply(target, thisArg, args)
+                        : Promise.resolve(new Response());
+                }
+            });
+        }
+        function bytesToText(buf) {
+            try {
+                if (!buf) return "";
+                if (ArrayBuffer.isView(buf)) buf = buf.buffer;
+                return new TextDecoder("utf-8").decode(buf);
+            } catch (e) {
+                return "";
+            }
+        }
+
+        function getXHRContent(xhr) {
+            try {
+                if (xhr.responseText) return xhr.responseText;
+                if (xhr.response) {
+                    if (typeof xhr.response === "string") return xhr.response;
+                    if (xhr.response instanceof ArrayBuffer) return bytesToText(xhr.response);
+                    if (ArrayBuffer.isView(xhr.response)) return bytesToText(xhr.response.buffer);
+                }
+            } catch (e) { }
+            return "";
+        }
+
+        function extractUrlsFromText(text) {
+            const urls = [];
+            if (!text || typeof text !== "string") return urls;
+            const re = /https?:\/\/[^\s"'<>\\]+?(?:\.m3u8|\.m3u)(?:[?#][^\s"'<>\\]*)?/gi;
+            let m;
+            while ((m = re.exec(text)) !== null) {
+                try {
+                    const u = new URL(m[0], location.href).href;
+                    if (!urls.includes(u)) urls.push(u);
+                } catch (e) { }
+            }
+            return urls;
+        }
+
+        function checkUrl(url) {
+            try {
+                url = new URL(url, location.href);
+                const h = url.href.toLowerCase();
+                return h.indexOf(".m3u8") != -1 || h.indexOf(".m3u?") != -1 || h.indexOf("/m3u8") != -1;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function checkContent(content) {
+            if (!content) return false;
+            if (typeof content !== "string") content = bytesToText(content);
+            return content.trim().startsWith("#EXTM3U");
+        }
+
+        const _r_text = unsafeWindow.Response.prototype.text;
+        unsafeWindow.Response.prototype.text = function () {
+            const self = this;
+            return _r_text.call(this).then((text) => {
+                if (checkContent(text)) {
+                    detect({ url: self.url, content: text });
+                } else if (checkUrl(self.url)) {
+                    detect({ url: self.url });
+                }
+                return text;
+            });
+        }
+
+        const _r_ab = unsafeWindow.Response.prototype.arrayBuffer;
+        unsafeWindow.Response.prototype.arrayBuffer = function () {
+            const self = this;
+            return _r_ab.call(this).then((buf) => {
+                try {
+                    const text = bytesToText(buf);
+                    if (checkContent(text)) {
+                        detect({ url: self.url, content: text });
+                    } else if (checkUrl(self.url)) {
+                        detect({ url: self.url });
+                    }
+                } catch (e) { }
+                return buf;
+            });
+        }
+
+        function isDetailContext(urlStr) {
+            if (location.pathname.includes("/detail/")) return true;
+            if (urlStr && (urlStr.includes("/api/videos/") || urlStr.includes("/detail/"))) return true;
+            return false;
+        }
+
+        const _r_json = unsafeWindow.Response.prototype.json;
+        unsafeWindow.Response.prototype.json = function () {
+            const self = this;
+            return _r_json.call(this).then((data) => {
+                try {
+                    if (self.url && self.url.includes("/api/process-video-url")) {
+                        clearList();
+                    }
+                    if (!isDetailContext(self.url) && data && typeof data === "object") {
+                        const s = JSON.stringify(data);
+                        if (s && s.length < 500000) {
+                            extractUrlsFromText(s).forEach(u => detect({ url: u }));
+                        }
+                    }
+                } catch (e) { }
+                return data;
+            });
+        }
+
+        const _open = unsafeWindow.XMLHttpRequest.prototype.open;
+        unsafeWindow.XMLHttpRequest.prototype.open = function (...args) {
+            this.addEventListener("load", () => {
+                try {
+                    if (args[1] && String(args[1]).includes("/api/process-video-url")) {
+                        clearList();
+                    }
+                    const content = getXHRContent(this);
+                    if (content && checkContent(content)) {
+                        detect({ url: args[1], content: content });
+                    } else if (checkUrl(args[1])) {
+                        detect({ url: args[1] });
+                    } else if (!isDetailContext(args[1]) && content && content.length < 300000 && /^[\s\r\n]*[\[{]/.test(content)) {
+                        extractUrlsFromText(content).forEach(u => detect({ url: u }));
+                    }
+                } catch { }
+            });
+            return _open.apply(this, args);
+        }
+
+        function scanDOMForM3U8() {
+            if (location.pathname.includes("/detail/")) return;
+            try {
+                if (!document.body) return;
+                const attrSel = ["data-url", "data-src", "data-m3u8", "data-m3u", "data-video", "data-videourl", "data-video-url", "data-playurl", "data-play-url", "data-file", "data-link", "data-value", "data-json", "href", "src"].map(a => `[${a}]`).join(",");
+                for (const el of document.querySelectorAll(attrSel)) {
+                    for (const attr of el.attributes) {
+                        const v = attr.value;
+                        if (!v || typeof v !== "string" || v.length > 2000) continue;
+                        if (/\.m3u8(?:[?#]|$)|\.m3u(?:[?#]|$)/i.test(v)) {
+                            extractUrlsFromText(v).forEach(u => detect({ url: u }));
+                        }
+                    }
+                }
+                for (const s of document.querySelectorAll("script")) {
+                    const t = (s.textContent || "").replace(/\\\//g, "/");
+                    if (t && t.length < 100000 && /\.m3u8|\.m3u(?:[?#]|$)|m3u8/i.test(t)) {
+                        extractUrlsFromText(t).forEach(u => detect({ url: u }));
+                    }
+                }
+                for (const e of performance.getEntriesByType("resource")) {
+                    if (e.name && e.name.length < 2000 && /\.m3u8(?:[?#]|$)|\.m3u(?:[?#]|$)/i.test(e.name)) {
+                        extractUrlsFromText(e.name).forEach(u => detect({ url: u }));
+                    }
+                }
+            } catch (e) { }
+        }
+
+        setInterval(scanDOMForM3U8, 1200);
+        setInterval(doVideos, 1000);
+
+        // Quét ngay một lần để không bỏ lỡ video đã có sẵn trước khi hook chạy.
+        setTimeout(() => {
+            try { scanDOMForM3U8(); } catch (e) { }
+            try { doVideos(); } catch (e) { }
+        }, 300);
+    }
 })();
