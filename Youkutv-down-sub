@@ -1,0 +1,1678 @@
+// ==UserScript==
+// @name         Youku.tv - Tải phụ đề ASS
+// @namespace    https://github.com/local/youku-ass-downloader
+// @version      1.3.0
+// @description  Tự động bắt link phụ đề .ass/.ssa trên youku.tv, đặt tên theo tập đang chọn và nhận diện ngôn ngữ phụ đề.
+// @author       local
+// @match        *://youku.tv/*
+// @match        *://*.youku.tv/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=youku.tv
+// @grant        unsafeWindow
+// @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
+// @connect      sub.ykimg.com
+// @connect      ykimg.com
+// @run-at       document-start
+// @license      MIT
+// @homepageURL  https://github.com/nnTuyen/Script-for-me/blob/main/Youkutv-down-sub
+// @downloadURL  https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Youkutv-down-sub
+// @updateURL    https://raw.githubusercontent.com/nnTuyen/Script-for-me/main/Youkutv-down-sub
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  /* ------------------------------------------------------------------ *
+   *  Cấu hình chung
+   * ------------------------------------------------------------------ */
+
+  const W = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
+  const IS_TOP = (() => {
+    try { return window.top === window; } catch (_) { return false; }
+  })();
+
+  const SUB_RE = /\.(?:ass|ssa)(?:[?#]|$)/i;
+
+  // Bắt URL phụ đề trong HTML/JSON, kể cả dạng escape "https:\/\/...".
+  const SUB_URL_RE = /(?:https?:)?(?:\\?\/){2}sub\.ykimg\.com(?:\\?\/)[^"'\s<>]+?\.(?:ass|ssa)(?:\\?[?][^"'\s<>]*)?/gi;
+
+  const PREFS_KEY = 'ykAssDownloader';
+
+  // Màu của track phụ đề đang chọn trong menu player.
+  const ACTIVE_SUBTITLE_COLOR = '#00a9f5';
+
+  // Thông tin hiển thị cho từng ngôn ngữ.
+  // "fileCode" là phần mã ngôn ngữ thêm vào tên file; rỗng nghĩa là không thêm.
+  const LANGUAGE_DEFS = {
+    'zh-Hans': { code: 'zh-Hans', fileCode: '', name: 'Tiếng Trung (Giản thể)' },
+    'zh-Hant': { code: 'zh-Hant', fileCode: 'zh', name: 'Tiếng Trung (Phồn thể)' },
+    zh: { code: 'zh', fileCode: '', name: 'Tiếng Trung' },
+    en: { code: 'en', fileCode: 'en', name: 'Tiếng Anh' },
+    vi: { code: 'vi', fileCode: 'vi', name: 'Tiếng Việt' },
+    th: { code: 'th', fileCode: 'th', name: 'Tiếng Thái' },
+    ko: { code: 'ko', fileCode: 'ko', name: 'Tiếng Hàn' },
+    ja: { code: 'ja', fileCode: 'ja', name: 'Tiếng Nhật' },
+    es: { code: 'es', fileCode: 'es', name: 'Tiếng Tây Ban Nha' },
+    pt: { code: 'pt', fileCode: 'pt', name: 'Tiếng Bồ Đào Nha' },
+    id: { code: 'id', fileCode: 'id', name: 'Tiếng Indonesia' },
+    ms: { code: 'ms', fileCode: 'ms', name: 'Tiếng Mã Lai' },
+    ar: { code: 'ar', fileCode: 'ar', name: 'Tiếng Ả Rập' },
+    he: { code: 'he', fileCode: 'he', name: 'Tiếng Do Thái' },
+    ru: { code: 'ru', fileCode: 'ru', name: 'Tiếng Nga' },
+    fr: { code: 'fr', fileCode: 'fr', name: 'Tiếng Pháp' },
+    de: { code: 'de', fileCode: 'de', name: 'Tiếng Đức' },
+  };
+
+  // Mã ngôn ngữ trong data-trackinfo của menu phụ đề Youku.
+  const YOUKU_TRACK_CODES = {
+    CHS: 'zh-Hans',
+    CHT: 'zh-Hant',
+    EN: 'en',
+    KR: 'ko',
+    ES: 'es',
+    PO: 'pt',
+    TH: 'th',
+    ID: 'id',
+    VI: 'vi',
+    MS: 'ms',
+  };
+
+  // Từ dừng để phân biệt các ngôn ngữ cùng dùng chữ Latinh.
+  const LATIN_STOPWORDS = {
+    en: [
+      'the', 'and', 'you', 'to', 'of', 'is', 'are', 'what', 'that', 'this', 'it', 'we',
+      'they', 'he', 'she', 'not', 'have', 'do', 'be', 'with', 'for', 'on', 'in', 'my',
+      'your', 'was', 'were', 'i', 'a', 'an', 'but', 'so', 'just', 'can', 'will', 'me',
+      'him', 'her', 'us', 'them', 'there', 'here', 'from', 'at', 'as', 'if', 'how',
+      'why', 'when', 'who', 'all', 'no', 'yes', 'got', 'get', 'know', 'think', 'want',
+      'going', 'come', 'go', 'right', 'okay', 'oh', 'yeah',
+    ],
+    vi: [
+      'và', 'là', 'không', 'của', 'tôi', 'bạn', 'anh', 'em', 'chúng', 'này', 'đó',
+      'được', 'có', 'người', 'một', 'những', 'cho', 'với', 'thì', 'mà', 'rất', 'đã',
+      'đang', 'sẽ', 'cũng', 'như', 'để', 'khi', 'ra', 'vào', 'lên', 'xuống', 'gì',
+      'sao', 'nào', 'thế', 'hả', 'ạ', 'ừ', 'đi', 'rồi', 'thôi', 'nhé', 'chứ', 'vậy',
+      'đây', 'kia', 'ai', 'đâu', 'bao', 'lại', 'phải', 'muốn', 'biết', 'thấy', 'nói',
+      'làm',
+    ],
+    id: [
+      'yang', 'dan', 'tidak', 'ini', 'itu', 'kamu', 'saya', 'aku', 'dengan', 'untuk',
+      'dari', 'ada', 'apa', 'kenapa', 'bagaimana', 'kita', 'mereka', 'dia', 'bisa',
+      'sudah', 'belum', 'akan', 'di', 'ke', 'dalam', 'juga', 'saja', 'tapi', 'kalau',
+      'karena', 'orang', 'sangat', 'lebih', 'lagi', 'mau', 'ingin', 'tahu', 'lihat',
+      'bilang',
+    ],
+    ms: [
+      'yang', 'dan', 'tidak', 'ini', 'itu', 'awak', 'saya', 'kami', 'dengan', 'untuk',
+      'dari', 'ada', 'apa', 'kenapa', 'bagaimana', 'kita', 'mereka', 'dia', 'boleh',
+      'sudah', 'belum', 'akan', 'di', 'ke', 'dalam', 'juga', 'sahaja', 'tetapi', 'kalau',
+      'kerana', 'orang', 'sangat', 'lebih', 'lagi', 'mahu', 'ingin', 'tahu', 'lihat',
+      'cakap',
+    ],
+    es: [
+      'el', 'la', 'los', 'las', 'que', 'y', 'de', 'en', 'un', 'una', 'es', 'no', 'por',
+      'para', 'con', 'como', 'pero', 'mi', 'tu', 'te', 'se', 'lo', 'del', 'al', 'su',
+      'sus', 'está', 'estoy', 'eres', 'muy', 'esto', 'eso', 'aquel', 'hay', 'fue', 'son',
+      'tiene', 'tengo', 'quiero', 'sabes', 'puede', 'dice', 'aquí', 'allí', 'porque',
+      'cuando', 'donde',
+    ],
+    pt: [
+      'o', 'a', 'os', 'as', 'que', 'e', 'de', 'em', 'um', 'uma', 'é', 'não', 'por',
+      'para', 'com', 'como', 'mas', 'meu', 'minha', 'sua', 'você', 'do', 'da', 'dos',
+      'das', 'se', 'isso', 'está', 'muito', 'ele', 'ela', 'eles', 'elas', 'nós', 'eu',
+      'tu', 'tem', 'temos', 'quero', 'sabe', 'pode', 'diz', 'aqui', 'ali', 'porque',
+      'quando', 'onde',
+    ],
+    fr: [
+      'le', 'la', 'les', 'des', 'que', 'et', 'de', 'en', 'un', 'une', 'est', 'pas',
+      'pour', 'avec', 'comme', 'mais', 'mon', 'ma', 'mes', 'tu', 'il', 'elle', 'nous',
+      'vous', 'ils', 'elles', 'dans', 'sur', 'au', 'aux', 'ce', 'cette', 'qui', 'quoi',
+      'je', 'ne', 'sont', 'être', 'avoir', 'fait', 'très', 'bien', 'oui', 'non',
+    ],
+    de: [
+      'der', 'die', 'das', 'und', 'ist', 'nicht', 'ein', 'eine', 'zu', 'mit', 'für',
+      'auf', 'von', 'dem', 'den', 'des', 'ich', 'du', 'er', 'sie', 'es', 'wir', 'ihr',
+      'haben', 'hat', 'sind', 'was', 'wie', 'aber', 'auch', 'noch', 'nur', 'oder',
+      'wenn', 'dann', 'hier', 'da', 'mein', 'dein', 'sehr', 'gut', 'nein', 'ja',
+    ],
+  };
+
+  const VIETNAMESE_CHAR_RE = /[ăâđêôơưĂÂĐÊÔƠƯạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/g;
+
+  /* ------------------------------------------------------------------ *
+   *  Tiện ích
+   * ------------------------------------------------------------------ */
+
+  function getPref(key, fallback) {
+    try {
+      if (typeof GM_getValue === 'function') {
+        const value = GM_getValue(key, fallback);
+        return value === undefined ? fallback : value;
+      }
+    } catch (_) { /* bỏ qua */ }
+
+    try {
+      const raw = localStorage.getItem(PREFS_KEY + '_' + key);
+      return raw === null ? fallback : JSON.parse(raw);
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function setPref(key, value) {
+    try {
+      if (typeof GM_setValue === 'function') {
+        GM_setValue(key, value);
+        return;
+      }
+    } catch (_) { /* bỏ qua */ }
+
+    try {
+      localStorage.setItem(PREFS_KEY + '_' + key, JSON.stringify(value));
+    } catch (_) { /* bỏ qua */ }
+  }
+
+  function safeDecode(value) {
+    try { return decodeURIComponent(value); } catch (_) { return value; }
+  }
+
+  function sanitizeFilename(name) {
+    let result = String(name || '')
+      .replace(/[\u0000-\u001f<>:"/\\|?*]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/[. ]+$/g, '')
+      .slice(0, 110)
+      .trim();
+
+    if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(result)) {
+      result = '_' + result;
+    }
+    return result || 'youku';
+  }
+
+  function normalizeTitleText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function stripSiteSuffix(value) {
+    let title = normalizeTitleText(value);
+
+    // Cắt phần đuôi kiểu "-YOUKU-Drama, Film, Show, Anime".
+    const youkuIndex = title.search(/\s*[-–—_|]\s*(?:YOUKU|Youku|优酷|優酷)/i);
+    if (youkuIndex > 0) title = title.slice(0, youkuIndex).trim();
+
+    return title
+      .replace(/\s*[-–—_|]\s*(?:Watch online|Watch Online|在线观看|線上看)\s*$/i, '')
+      .replace(/\s*[-–—_|]\s*(?:高清|超清|蓝光)?(?:正版)?(?:视频)?(?:在线观看)\s*$/i, '')
+      .trim();
+  }
+
+  // Tên tập đang phát: ưu tiên tiêu đề trên player, sau đó tới tập đang
+  // được chọn trong danh sách tập. Tên này đổi theo video/tập đang xem.
+  function currentEpisodeTitle() {
+    const selectors = [
+      '#youku-dashboard .kui-toplayer-title',
+      '.kui-toplayer-title',
+      '.new-pic-text-item .new-currentTitle',
+      '.new-anthology-title-wrap .new-currentTitle',
+      '.new-currentTitle',
+    ];
+
+    for (const selector of selectors) {
+      const nodes = document.querySelectorAll(selector);
+      for (const node of nodes) {
+        const text = normalizeTitleText(node.textContent);
+        if (text && text.length <= 180) return text;
+      }
+    }
+    return '';
+  }
+
+  // Tên show/phim (dùng để ghép với tên tập).
+  function currentShowTitle() {
+    const selectors = ['h3.new-title-name', '.new-title-name'];
+
+    for (const selector of selectors) {
+      const node = document.querySelector(selector);
+      const text = normalizeTitleText(node && node.textContent);
+      if (text && text.length <= 180) return text;
+    }
+    return '';
+  }
+
+  function pageBaseName() {
+    let episode = stripSiteSuffix(currentEpisodeTitle());
+    const show = stripSiteSuffix(currentShowTitle());
+
+    if (episode) {
+      // Nếu tên tập đã có sẵn tên show thì không ghép lặp lại.
+      if (show && !episode.toLowerCase().includes(show.toLowerCase())) {
+        return sanitizeFilename(`${show} - ${episode}`);
+      }
+      return sanitizeFilename(episode);
+    }
+
+    // Dự phòng khi chưa đọc được tiêu đề player/danh sách tập.
+    let title = stripSiteSuffix(document.title);
+
+    if (!title || /^(?:优酷|優酷|youku(?:\.tv)?)$/i.test(title)) {
+      const match = location.pathname.match(/id_([^/]+?)\.html/i);
+      title = match ? safeDecode(match[1]).replace(/=+$/g, '') : 'youku';
+    }
+
+    return sanitizeFilename(title);
+  }
+
+  function prettyUrl(url) {
+    try {
+      const parsed = new URL(url);
+      const file = parsed.pathname.split('/').pop() || '';
+      return parsed.hostname + '/' + file;
+    } catch (_) {
+      return url;
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  Nhận diện ngôn ngữ phụ đề
+   * ------------------------------------------------------------------ */
+
+  function parseTrackInfoValue(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+
+    const candidates = [raw];
+    try {
+      const decoded = decodeURIComponent(raw);
+      if (decoded !== raw) candidates.push(decoded);
+    } catch (_) { /* bỏ qua */ }
+
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (parsed && typeof parsed === 'object') return parsed;
+      } catch (_) { /* thử dạng khác */ }
+    }
+    return null;
+  }
+
+  function parseTrackInfoElement(element) {
+    if (!element || typeof element.getAttribute !== 'function') return null;
+
+    const info = parseTrackInfoValue(element.getAttribute('data-trackinfo'));
+    if (!info) return null;
+
+    const code = String(info.language || '').toUpperCase().trim();
+    if (!YOUKU_TRACK_CODES[code]) return null;
+
+    const label = String(element.textContent || '');
+    return {
+      code,
+      auto: /auto-translation/i.test(label),
+    };
+  }
+
+  function readActiveSubtitleTrack() {
+    try {
+      const container = document.querySelector('.kui-subtitleicon-subtitles-container');
+      if (!container) return null;
+
+      const items = [...container.querySelectorAll('.kui-subtitleicon-subtitle-item[data-trackinfo]')];
+
+      // Track đang chọn có style color:#00A9F5 do player gắn trực tiếp.
+      for (const element of items) {
+        const inline = String((element.style && element.style.color) || '')
+          .replace(/\s+/g, '')
+          .toLowerCase();
+        if (inline !== ACTIVE_SUBTITLE_COLOR && inline !== 'rgb(0,169,245)') continue;
+
+        const info = parseTrackInfoElement(element);
+        if (info) return info;
+      }
+
+      // Dự phòng khi player đổi màu bằng CSS thay vì style inline.
+      for (const element of items) {
+        let computed = '';
+        try { computed = getComputedStyle(element).color; } catch (_) { /* bỏ qua */ }
+        computed = String(computed || '').replace(/\s+/g, '').toLowerCase();
+        if (computed !== 'rgb(0,169,245)') continue;
+
+        const info = parseTrackInfoElement(element);
+        if (info) return info;
+      }
+    } catch (_) { /* bỏ qua */ }
+
+    return null;
+  }
+
+  let pendingLanguage = null;
+
+  function rememberSubtitleLanguageFromEvent(event) {
+    try {
+      const target = event.target;
+      if (!target || typeof target.closest !== 'function') return;
+
+      const element = target.closest(
+        '.kui-subtitleicon-subtitles-container .kui-subtitleicon-subtitle-item[data-trackinfo]'
+      );
+      if (!element) return;
+
+      const info = parseTrackInfoElement(element);
+      if (!info) return;
+
+      pendingLanguage = { code: info.code, auto: info.auto, at: Date.now() };
+    } catch (_) { /* bỏ qua */ }
+  }
+
+  function hookSubtitleLanguageMenu() {
+    document.addEventListener('pointerdown', rememberSubtitleLanguageFromEvent, true);
+    document.addEventListener('click', rememberSubtitleLanguageFromEvent, true);
+  }
+
+  function currentLanguageHint() {
+    const now = Date.now();
+
+    if (pendingLanguage && now - pendingLanguage.at < 8000) {
+      return { code: pendingLanguage.code, auto: pendingLanguage.auto, source: 'click' };
+    }
+
+    const active = readActiveSubtitleTrack();
+    return active ? { ...active, source: 'active' } : null;
+  }
+
+  function normalizeLanguageHint(hint) {
+    if (!hint || typeof hint !== 'object') return null;
+
+    const code = String(hint.code || '').toUpperCase().trim();
+    if (!YOUKU_TRACK_CODES[code]) return null;
+
+    return {
+      code,
+      auto: !!hint.auto,
+      source: hint.source === 'click' ? 'click' : 'active',
+    };
+  }
+
+  function languageDefinition(code) {
+    const def = LANGUAGE_DEFS[String(code || '')];
+    return def ? { ...def, auto: false } : null;
+  }
+
+  function languageFromYoukuCode(code, auto) {
+    const canonical = YOUKU_TRACK_CODES[String(code || '').toUpperCase()];
+    const def = canonical ? LANGUAGE_DEFS[canonical] : null;
+    return def ? { ...def, auto: !!auto } : null;
+  }
+
+  function chooseLanguage(uiHint, detected) {
+    const uiLanguage = uiHint ? languageFromYoukuCode(uiHint.code, uiHint.auto) : null;
+
+    if (detected && detected.code) {
+      const detectedLanguage = languageDefinition(detected.code);
+
+      if (detectedLanguage && detected.confidence === 'high') {
+        // Nếu chỉ biết là tiếng Trung, giữ phiên bản Giản thể/Phồn thể từ menu.
+        if (uiLanguage && detected.code === 'zh' && /^zh(?:-|$)/.test(uiLanguage.code)) {
+          return uiLanguage;
+        }
+
+        if (uiLanguage && uiLanguage.code === detectedLanguage.code) {
+          return uiLanguage;
+        }
+
+        return detectedLanguage;
+      }
+
+      if (!uiLanguage && detectedLanguage) return detectedLanguage;
+    }
+
+    return uiLanguage;
+  }
+
+  function countMatches(text, regex) {
+    const matches = String(text || '').match(regex);
+    return matches ? matches.length : 0;
+  }
+
+  function assDialogueBody(line) {
+    let commas = 0;
+    for (let index = 0; index < line.length; index++) {
+      if (line.charCodeAt(index) !== 44) continue; // dấu phẩy
+      commas++;
+      if (commas === 9) return line.slice(index + 1);
+    }
+    return line;
+  }
+
+  function extractAssDialogueText(text) {
+    const lines = String(text || '').split(/\r?\n/);
+    const chunks = [];
+
+    for (const line of lines) {
+      if (!/^\s*Dialogue\s*:/i.test(line)) continue;
+
+      const clean = assDialogueBody(line)
+        .replace(/\{[^}]*\}/g, ' ')
+        .replace(/\\[Nn]/g, ' ')
+        .replace(/\\h/gi, ' ')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\\[A-Za-z][^\\\s]*/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (clean) chunks.push(clean);
+      if (chunks.length >= 5000) break;
+    }
+
+    return chunks.join('\n');
+  }
+
+  function scoreLatinLanguage(text) {
+    const words = String(text || '')
+      .toLowerCase()
+      .match(/[a-z\u00C0-\u024F\u1E00-\u1EFF]+/g) || [];
+
+    if (words.length < 4) {
+      return { code: '', score: 0, secondScore: 0, wordCount: words.length };
+    }
+
+    const counts = new Map();
+    for (const word of words) counts.set(word, (counts.get(word) || 0) + 1);
+
+    let bestCode = '';
+    let bestScore = 0;
+    let secondScore = 0;
+
+    for (const [code, stopwords] of Object.entries(LATIN_STOPWORDS)) {
+      let score = 0;
+      for (const word of stopwords) score += counts.get(word) || 0;
+
+      if (score > bestScore) {
+        secondScore = bestScore;
+        bestScore = score;
+        bestCode = code;
+      } else if (score > secondScore) {
+        secondScore = score;
+      }
+    }
+
+    return { code: bestCode, score: bestScore, secondScore, wordCount: words.length };
+  }
+
+  function detectAssLanguage(text) {
+    const dialogue = extractAssDialogueText(text);
+    if (!dialogue || dialogue.length < 2) return null;
+
+    const cjk = countMatches(dialogue, /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/g);
+    const kana = countMatches(dialogue, /[\u3040-\u30FF]/g);
+    const hangul = countMatches(dialogue, /[\uAC00-\uD7AF\u1100-\u11FF]/g);
+    const thai = countMatches(dialogue, /[\u0E00-\u0E7F]/g);
+    const arabic = countMatches(dialogue, /[\u0600-\u06FF\u0750-\u077F]/g);
+    const cyrillic = countMatches(dialogue, /[\u0400-\u04FF]/g);
+    const hebrew = countMatches(dialogue, /[\u0590-\u05FF]/g);
+    const latin = countMatches(dialogue, /[A-Za-z\u00C0-\u024F\u1E00-\u1EFF]/g);
+    const vietnamese = countMatches(dialogue, VIETNAMESE_CHAR_RE);
+    const total = cjk + kana + hangul + thai + arabic + cyrillic + hebrew + latin;
+
+    if (total < 4) return null;
+
+    if (hangul >= 5 && hangul >= total * 0.1) return { code: 'ko', confidence: 'high' };
+    if (kana >= 5 && kana > cjk * 0.08) return { code: 'ja', confidence: 'high' };
+    if (cjk >= 5 && cjk >= latin * 0.3) return { code: 'zh', confidence: 'high' };
+    if (thai >= 5 && thai >= total * 0.1) return { code: 'th', confidence: 'high' };
+    if (arabic >= 5 && arabic >= total * 0.1) return { code: 'ar', confidence: 'high' };
+    if (hebrew >= 5 && hebrew >= total * 0.1) return { code: 'he', confidence: 'high' };
+    if (cyrillic >= 5 && cyrillic >= total * 0.1) return { code: 'ru', confidence: 'high' };
+
+    if (vietnamese >= 10 && vietnamese / Math.max(1, latin) >= 0.02) {
+      return { code: 'vi', confidence: 'high' };
+    }
+
+    const latinScore = scoreLatinLanguage(dialogue);
+    if (
+      latinScore.code &&
+      latinScore.score >= 4 &&
+      latinScore.score >= latinScore.secondScore + 2 &&
+      latinScore.score / Math.max(1, latinScore.wordCount) >= 0.01
+    ) {
+      return { code: latinScore.code, confidence: 'high' };
+    }
+
+    if (vietnamese >= 3 && vietnamese / Math.max(1, latin) >= 0.01) {
+      return { code: 'vi', confidence: 'low' };
+    }
+    if (latinScore.code) return { code: latinScore.code, confidence: 'low' };
+    if (latin >= 20) return { code: 'en', confidence: 'low' };
+    return null;
+  }
+
+  function decodeAssBuffer(buffer) {
+    if (typeof TextDecoder !== 'function') return '';
+
+    let bytes;
+    try {
+      bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    } catch (_) {
+      return '';
+    }
+    if (!bytes || !bytes.length) return '';
+
+    if (bytes[0] === 0xFF && bytes[1] === 0xFE) {
+      try { return new TextDecoder('utf-16le').decode(bytes); } catch (_) { /* bỏ qua */ }
+    }
+    if (bytes[0] === 0xFE && bytes[1] === 0xFF) {
+      try { return new TextDecoder('utf-16be').decode(bytes); } catch (_) { /* bỏ qua */ }
+    }
+
+    let best = '';
+    let bestBad = Infinity;
+
+    for (const encoding of ['utf-8', 'gb18030', 'big5']) {
+      try {
+        const decoded = new TextDecoder(encoding).decode(bytes);
+        const bad = (decoded.match(/\uFFFD/g) || []).length;
+
+        if (bad < bestBad) {
+          best = decoded;
+          bestBad = bad;
+        }
+        if (bad === 0) break;
+      } catch (_) { /* encoding không được hỗ trợ */ }
+    }
+
+    return best;
+  }
+
+  function resolveItemLanguage(item) {
+    if (!item) return;
+
+    let hint = item.languageHint;
+    if (!hint) hint = readActiveSubtitleTrack();
+
+    item.language = chooseLanguage(hint, item.detectedLanguage);
+    item.languageResolved = true;
+  }
+
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function normalizeSubtitleUrl(raw) {
+    let value = String(raw || '').trim();
+    value = value
+      .replace(/\\+u002f/gi, '/')
+      .replace(/\\\//g, '/')
+      .replace(/&amp;/gi, '&');
+
+    if (value.startsWith('//')) value = 'https:' + value;
+    return value;
+  }
+
+  function isSubtitleUrl(url) {
+    return /^https?:\/\//i.test(url) && SUB_RE.test(url);
+  }
+
+  function subtitleKey(url) {
+    try {
+      const parsed = new URL(url);
+      return parsed.hostname.toLowerCase() + parsed.pathname;
+    } catch (_) {
+      return url;
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  Kho phụ đề đã bắt được
+   * ------------------------------------------------------------------ */
+
+  const subtitles = [];
+  const subtitleByKey = new Map();
+  let autoDownload = false;
+  let lastPath = location.pathname;
+
+  try { autoDownload = !!getPref('autoDownload', false); } catch (_) { /* bỏ qua */ }
+
+  function startPrefetch(item) {
+    if (!item || item.prefetchPromise || item.buffer) return item.prefetchPromise;
+
+    item.prefetching = true;
+    item.prefetchPromise = (async () => {
+      try {
+        // Tải sẵn file nhỏ này để vừa nhận diện ngôn ngữ, vừa tái sử dụng khi bấm Tải.
+        const buffer = await getBuffer(item.url);
+        item.buffer = buffer;
+        item.detectedLanguage = detectAssLanguage(decodeAssBuffer(buffer));
+      } catch (error) {
+        console.warn('[Youku ASS] Không phân tích được phụ đề:', error);
+      } finally {
+        item.prefetching = false;
+
+        if (!item.languageHint) {
+          const active = readActiveSubtitleTrack();
+          if (active) item.languageHint = { ...active, source: 'active' };
+        }
+
+        resolveItemLanguage(item);
+        if (subtitles.includes(item)) render();
+      }
+    })();
+
+    return item.prefetchPromise;
+  }
+
+  function addSubtitle(rawUrl, source, hint) {
+    const url = normalizeSubtitleUrl(rawUrl);
+    if (!isSubtitleUrl(url)) return;
+
+    const key = subtitleKey(url);
+    const existing = subtitleByKey.get(key);
+    const normalizedHint = normalizeLanguageHint(hint);
+
+    if (existing) {
+      // Link có token mới: cập nhật để nút Tải dùng link mới nhất.
+      existing.url = url;
+
+      if (!existing.languageHint && normalizedHint) {
+        existing.languageHint = normalizedHint;
+        existing.language = languageFromYoukuCode(normalizedHint.code, normalizedHint.auto);
+        if (existing.languageResolved) render();
+      }
+      return;
+    }
+
+    const item = {
+      url,
+      key,
+      source: source || 'network',
+      foundAt: Date.now(),
+      downloading: false,
+      downloaded: false,
+      autoTried: false,
+
+      // Chụp lại tên tập/show tại thời điểm bắt được file. Nhờ vậy nếu người
+      // dùng chuyển tập mà danh sách chưa kịp xoá, tên file vẫn đúng tập cũ.
+      episodeTitle: currentEpisodeTitle(),
+      showTitle: currentShowTitle(),
+      pageTitle: stripSiteSuffix(document.title),
+      pathname: location.pathname,
+
+      languageHint: normalizedHint,
+      language: normalizedHint
+        ? languageFromYoukuCode(normalizedHint.code, normalizedHint.auto)
+        : null,
+      detectedLanguage: null,
+      languageResolved: false,
+      prefetching: false,
+      prefetchPromise: null,
+      buffer: null,
+    };
+
+    subtitles.push(item);
+    subtitleByKey.set(key, item);
+
+    ensureUI();
+    render();
+    pulseFab();
+
+    const languageName = item.language ? item.language.name : '';
+    toast(
+      `Đã bắt được phụ đề #${subtitles.length}${languageName ? ' · ' + languageName : ''}`,
+      2600
+    );
+
+    // Bắt đầu tải ngầm ngay từ đầu; nút Tải sẽ dùng lại buffer này.
+    startPrefetch(item);
+
+    if (autoDownload && !item.autoTried) {
+      item.autoTried = true;
+      setTimeout(() => downloadSubtitle(item), 500);
+    }
+  }
+
+  function handleFoundSubtitle(url, source, hint) {
+    if (IS_TOP) {
+      addSubtitle(url, source, hint);
+    } else {
+      try {
+        window.top.postMessage(
+          {
+            __ykAssSubtitle: String(url),
+            __ykAssSubtitleLang: normalizeLanguageHint(hint),
+          },
+          '*'
+        );
+      } catch (_) { /* bỏ qua */ }
+    }
+  }
+
+  function resetForNewVideo() {
+    subtitles.length = 0;
+    subtitleByKey.clear();
+    pendingLanguage = null;
+
+    // Bỏ qua các resource cũ của video trước.
+    try {
+      performanceIndex = performance.getEntriesByType('resource').length;
+    } catch (_) { /* bỏ qua */ }
+
+    render();
+    setTimeout(scanPerformanceEntries, 900);
+    setTimeout(scanDocument, 1800);
+    setTimeout(scanDocument, 5000);
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  Bắt request: fetch + XMLHttpRequest + performance + HTML
+   * ------------------------------------------------------------------ */
+
+  function checkRequestUrl(rawUrl) {
+    if (!rawUrl) return;
+    try {
+      const absolute = new URL(String(rawUrl), location.href).href;
+      if (SUB_RE.test(absolute)) handleFoundSubtitle(absolute, 'network', currentLanguageHint());
+    } catch (_) { /* bỏ qua */ }
+  }
+
+  function hookFetch() {
+    const originalFetch = W.fetch;
+    if (typeof originalFetch !== 'function' || originalFetch.__ykAssPatched) return;
+
+    function patchedFetch(...args) {
+      try {
+        const input = args[0];
+        const url = typeof input === 'string' ? input : (input && input.url);
+        if (url) checkRequestUrl(url);
+      } catch (_) { /* bỏ qua */ }
+
+      return originalFetch.apply(this, args);
+    }
+
+    patchedFetch.__ykAssPatched = true;
+    try { W.fetch = patchedFetch; } catch (_) { /* bỏ qua */ }
+  }
+
+  function hookXhr() {
+    const proto = W.XMLHttpRequest && W.XMLHttpRequest.prototype;
+    if (!proto || proto.open.__ykAssPatched) return;
+
+    const originalOpen = proto.open;
+    function patchedOpen(method, url, ...rest) {
+      try { checkRequestUrl(url); } catch (_) { /* bỏ qua */ }
+      return originalOpen.call(this, method, url, ...rest);
+    }
+
+    patchedOpen.__ykAssPatched = true;
+    try { proto.open = patchedOpen; } catch (_) { /* bỏ qua */ }
+  }
+
+  let performanceIndex = 0;
+
+  function scanPerformanceEntries() {
+    let entries;
+    try {
+      entries = performance.getEntriesByType('resource');
+    } catch (_) {
+      return;
+    }
+
+    for (; performanceIndex < entries.length; performanceIndex++) {
+      const name = entries[performanceIndex] && entries[performanceIndex].name;
+      if (name && SUB_RE.test(name)) handleFoundSubtitle(name, 'performance', currentLanguageHint());
+    }
+  }
+
+  function scanDocument() {
+    try {
+      if (!document.documentElement) return;
+
+      const html = document.documentElement.outerHTML;
+      for (const match of html.matchAll(SUB_URL_RE)) {
+        handleFoundSubtitle(match[0], 'page');
+      }
+
+      document.querySelectorAll('track[src]').forEach(track => {
+        if (track.src && isSubtitleUrl(track.src)) handleFoundSubtitle(track.src, 'track');
+      });
+    } catch (_) { /* bỏ qua */ }
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  Giao diện (chỉ ở frame trên cùng)
+   * ------------------------------------------------------------------ */
+
+  let uiHost = null;
+  let shadowRoot = null;
+  let els = {};
+  let toastTimer = 0;
+
+  const UI_CSS = `
+    :host {
+      all: initial;
+      color-scheme: light dark;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    .wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 10px;
+      padding: 18px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+      font-size: 13px;
+      line-height: 1.4;
+      color: #1f2328;
+      -webkit-font-smoothing: antialiased;
+    }
+    .fab {
+      position: relative;
+      width: 54px;
+      height: 54px;
+      border: 0;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #2b7fff, #0057d9);
+      color: #fff;
+      font: 800 17px/1 inherit;
+      letter-spacing: .4px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 8px 24px rgba(0, 80, 200, .34), 0 2px 6px rgba(0, 0, 0, .18);
+      transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease;
+      opacity: .9;
+    }
+    .fab:hover {
+      opacity: 1;
+      transform: translateY(-2px);
+      box-shadow: 0 12px 30px rgba(0, 80, 200, .42), 0 2px 6px rgba(0, 0, 0, .2);
+    }
+    .fab:active { transform: translateY(0) scale(.97); }
+    .fab.pulse { animation: ykPulse .6s ease; }
+    @keyframes ykPulse {
+      0% { transform: scale(1); }
+      40% { transform: scale(1.12); }
+      100% { transform: scale(1); }
+    }
+    .badge {
+      position: absolute;
+      top: -5px;
+      right: -5px;
+      min-width: 21px;
+      height: 21px;
+      padding: 0 5px;
+      border: 2px solid #fff;
+      border-radius: 11px;
+      background: #ff3b30;
+      color: #fff;
+      font: 700 11px/17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      text-align: center;
+    }
+    .panel {
+      width: min(380px, calc(100vw - 36px));
+      max-height: min(72vh, 580px);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid rgba(0, 0, 0, .1);
+      border-radius: 16px;
+      background: #fff;
+      color: #1f2328;
+      box-shadow: 0 18px 54px rgba(0, 0, 0, .24), 0 2px 8px rgba(0, 0, 0, .08);
+      animation: ykIn .16s ease-out;
+    }
+    @keyframes ykIn {
+      from { opacity: 0; transform: translateY(6px) scale(.98); }
+      to { opacity: 1; transform: none; }
+    }
+    .head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 14px 10px;
+    }
+    .head-title { font-size: 15px; font-weight: 700; }
+    .head-sub { margin-top: 2px; font-size: 12px; color: #667085; }
+    .icon-btn {
+      flex: none;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: inherit;
+      font: 400 16px/1 inherit;
+      cursor: pointer;
+    }
+    .icon-btn:hover { background: rgba(0, 0, 0, .06); }
+    .list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      max-height: 310px;
+      padding: 2px 10px 10px;
+      overflow: auto;
+      overscroll-behavior: contain;
+    }
+    .empty {
+      padding: 18px 12px 20px;
+      color: #7a828e;
+      font-size: 12px;
+      line-height: 1.5;
+      text-align: center;
+    }
+    .item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 9px 10px;
+      border: 1px solid #eaeef2;
+      border-radius: 10px;
+      background: #fafbfc;
+    }
+    .item-info { flex: 1; min-width: 0; }
+    .item-name {
+      min-width: 0;
+      overflow: hidden;
+      font-size: 12.5px;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .item-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      margin-top: 2px;
+    }
+    .lang {
+      flex: none;
+      max-width: 68%;
+      overflow: hidden;
+      padding: 2px 6px;
+      border: 1px solid #cfe0ff;
+      border-radius: 999px;
+      background: #eef4ff;
+      color: #0958d9;
+      font-size: 10px;
+      font-weight: 600;
+      line-height: 1.35;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .lang.pending, .lang.unknown {
+      border-color: #e5e7eb;
+      background: #f3f4f6;
+      color: #7a828e;
+      font-weight: 500;
+    }
+    .item-sub {
+      flex: 1;
+      min-width: 0;
+      display: block;
+      margin-top: 0;
+      overflow: hidden;
+      color: #7a828e;
+      font-size: 11px;
+      text-decoration: none;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .item-sub:hover { color: #1677ff; text-decoration: underline; }
+    .item-actions { display: flex; flex: none; gap: 5px; }
+    .mini {
+      padding: 5px 8px;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      background: #fff;
+      color: #1f2328;
+      font: 600 11px/1.2 inherit;
+      cursor: pointer;
+    }
+    .mini:hover { background: #eef1f4; }
+    .mini:disabled { cursor: default; opacity: .55; }
+    .mini.primary { border-color: #1677ff; background: #1677ff; color: #fff; }
+    .mini.primary:hover { background: #0b63d8; }
+    .bar { display: flex; gap: 8px; padding: 0 14px 10px; }
+    .btn {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1px solid #d0d7de;
+      border-radius: 8px;
+      background: #f6f8fa;
+      color: #1f2328;
+      font: 600 12px/1.2 inherit;
+      cursor: pointer;
+    }
+    .btn:hover { background: #eef1f4; }
+    .btn:disabled { cursor: default; opacity: .5; }
+    .btn.primary { border-color: #1677ff; background: #1677ff; color: #fff; }
+    .btn.primary:hover { background: #0b63d8; }
+    .auto {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 14px 11px;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .auto input { width: 14px; height: 14px; margin: 0; accent-color: #1677ff; }
+    .tip {
+      padding: 10px 14px 12px;
+      border-top: 1px solid #eaeef2;
+      color: #7a828e;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .toast {
+      position: fixed;
+      top: 18px;
+      left: 50%;
+      z-index: 2147483647;
+      max-width: min(90vw, 560px);
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: #1f2328;
+      color: #fff;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, .28);
+      font: 600 12.5px/1.4 inherit;
+      text-align: center;
+      opacity: 0;
+      visibility: hidden;
+      transform: translate(-50%, -6px);
+      transition: opacity .18s ease, transform .18s ease, visibility .18s;
+      pointer-events: none;
+    }
+    .toast.show {
+      opacity: 1;
+      visibility: visible;
+      transform: translate(-50%, 0);
+    }
+    @media (prefers-color-scheme: dark) {
+      .wrap { color: #e6edf3; }
+      .panel { background: #161b22; color: #e6edf3; border-color: #30363d; }
+      .head-sub, .empty, .item-sub, .tip { color: #8b949e; }
+      .item { background: #0d1117; border-color: #30363d; }
+      .lang { border-color: #2d4a7a; background: #1b2a44; color: #8ab4ff; }
+      .lang.pending, .lang.unknown { border-color: #30363d; background: #21262d; color: #8b949e; }
+      .icon-btn:hover { background: #21262d; }
+      .mini { background: #21262d; border-color: #30363d; color: #e6edf3; }
+      .mini:hover { background: #30363d; }
+      .mini.primary { background: #2b7fff; border-color: #2b7fff; color: #fff; }
+      .mini.primary:hover { background: #1c6be8; }
+      .btn { background: #21262d; border-color: #30363d; color: #e6edf3; }
+      .btn:hover { background: #30363d; }
+      .btn.primary { background: #2b7fff; border-color: #2b7fff; color: #fff; }
+      .btn.primary:hover { background: #1c6be8; }
+      .tip { border-top-color: #30363d; }
+      .badge { border-color: #161b22; }
+      .toast { background: #e6edf3; color: #0d1117; }
+    }
+  `;
+
+  function ensureUI() {
+    if (!IS_TOP || uiHost || !document.documentElement) return;
+
+    uiHost = document.createElement('div');
+    uiHost.id = 'yk-ass-downloader-host';
+    uiHost.style.cssText = 'all: initial; position: fixed; right: 0; bottom: 0; z-index: 2147483647;';
+
+    shadowRoot = uiHost.attachShadow({ mode: 'open' });
+    shadowRoot.innerHTML = `
+      <style>${UI_CSS}</style>
+      <div class="wrap">
+        <div class="panel" id="panel" hidden role="dialog" aria-label="Phụ đề Youku">
+          <div class="head">
+            <div>
+              <div class="head-title">Phụ đề Youku</div>
+              <div class="head-sub" id="hint">Đang chờ phụ đề…</div>
+            </div>
+            <button type="button" class="icon-btn" id="close" title="Đóng" aria-label="Đóng">✕</button>
+          </div>
+          <div class="list" id="list"></div>
+          <div class="bar">
+            <button type="button" class="btn primary" id="download-all">Tải tất cả</button>
+            <button type="button" class="btn" id="rescan">Quét lại</button>
+          </div>
+          <label class="auto">
+            <input type="checkbox" id="auto">
+            <span>Tự động tải khi bắt được</span>
+          </label>
+          <div class="tip">Mở video và phát vài giây. Nếu chưa thấy phụ đề, hãy bật phụ đề (CC) trong player rồi tua lại một chút. Đổi ngôn ngữ phụ đề trong player để bắt thêm file. Ngôn ngữ được nhận diện theo track đang chọn và nội dung file.</div>
+        </div>
+        <button type="button" class="fab" id="fab" title="Tải phụ đề Youku (ASS)" aria-label="Tải phụ đề Youku" aria-expanded="false">
+          <span>CC</span>
+          <span class="badge" id="badge" hidden>0</span>
+        </button>
+      </div>
+      <div class="toast" id="toast"></div>
+    `;
+
+    document.documentElement.appendChild(uiHost);
+
+    els = {
+      panel: shadowRoot.getElementById('panel'),
+      hint: shadowRoot.getElementById('hint'),
+      list: shadowRoot.getElementById('list'),
+      close: shadowRoot.getElementById('close'),
+      downloadAll: shadowRoot.getElementById('download-all'),
+      rescan: shadowRoot.getElementById('rescan'),
+      auto: shadowRoot.getElementById('auto'),
+      fab: shadowRoot.getElementById('fab'),
+      badge: shadowRoot.getElementById('badge'),
+      toast: shadowRoot.getElementById('toast'),
+    };
+
+    els.auto.checked = !!autoDownload;
+
+    els.fab.addEventListener('click', () => setPanelOpen(els.panel.hidden));
+    els.close.addEventListener('click', () => setPanelOpen(false));
+    els.downloadAll.addEventListener('click', downloadAll);
+    els.rescan.addEventListener('click', () => {
+      scanPerformanceEntries();
+      scanDocument();
+      toast('Đã quét lại trang.', 2200);
+    });
+
+    els.auto.addEventListener('change', () => {
+      autoDownload = !!els.auto.checked;
+      setPref('autoDownload', autoDownload);
+
+      if (autoDownload) {
+        toast('Đã bật tự động tải.', 2200);
+        subtitles.forEach((item, index) => {
+          if (!item.autoTried && !item.downloading) {
+            item.autoTried = true;
+            setTimeout(() => downloadSubtitle(item), 250 + index * 500);
+          }
+        });
+      } else {
+        toast('Đã tắt tự động tải.', 2200);
+      }
+    });
+
+    render();
+  }
+
+  function setPanelOpen(open) {
+    if (!els.panel) return;
+    els.panel.hidden = !open;
+    if (els.fab) els.fab.setAttribute('aria-expanded', String(open));
+    if (open) render();
+  }
+
+  function pulseFab() {
+    if (!els.fab) return;
+    els.fab.classList.remove('pulse');
+    void els.fab.offsetWidth;
+    els.fab.classList.add('pulse');
+  }
+
+  function toast(message, duration) {
+    if (!shadowRoot || !els.toast) return;
+
+    els.toast.textContent = message;
+    els.toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      els.toast.classList.remove('show');
+    }, Math.max(1200, duration || 3000));
+  }
+
+  function render() {
+    if (!IS_TOP) return;
+    if (!uiHost) ensureUI();
+    if (!els.list) return;
+
+    const count = subtitles.length;
+
+    els.badge.hidden = count === 0;
+    els.badge.textContent = String(count);
+    els.hint.textContent = count
+      ? `Đã bắt được ${count} phụ đề`
+      : 'Đang chờ phụ đề…';
+    els.downloadAll.disabled = count === 0;
+    els.fab.title = count
+      ? `Tải phụ đề Youku (${count})`
+      : 'Tải phụ đề Youku (ASS)';
+
+    els.list.replaceChildren();
+
+    if (!count) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'Chưa bắt được phụ đề. Hãy phát video (và bật CC trong player nếu cần) rồi chờ vài giây.';
+      els.list.appendChild(empty);
+      return;
+    }
+
+    subtitles.forEach((item, index) => {
+      els.list.appendChild(renderItem(item, index));
+    });
+  }
+
+  function refreshItemTitles(item) {
+    if (!item || item.pathname !== location.pathname) return;
+
+    if (!item.episodeTitle) item.episodeTitle = currentEpisodeTitle();
+    if (!item.showTitle) item.showTitle = currentShowTitle();
+  }
+
+  function itemDisplayTitle(item, index) {
+    refreshItemTitles(item);
+
+    const episode = stripSiteSuffix(item.episodeTitle || '');
+    if (episode) return episode;
+
+    const show = stripSiteSuffix(item.showTitle || '');
+    if (show) return show;
+
+    const page = stripSiteSuffix(item.pageTitle || '');
+    if (page) return page;
+
+    return `Phụ đề ${index + 1}`;
+  }
+
+  function itemTitleTooltip(item, fallback) {
+    const lines = [];
+    const show = stripSiteSuffix(item.showTitle || '');
+    const episode = stripSiteSuffix(item.episodeTitle || '');
+
+    if (show && episode) lines.push(`${show} - ${episode}`);
+    else if (episode) lines.push(episode);
+    else if (show) lines.push(show);
+    else lines.push(fallback);
+
+    if (item.language) {
+      lines.push(`Ngôn ngữ: ${item.language.name}${item.language.auto ? ' (tự động)' : ''}`);
+    }
+
+    lines.push(item.url);
+    return lines.join('\n');
+  }
+
+  function renderItem(item, index) {
+    const row = document.createElement('div');
+    row.className = 'item';
+
+    const info = document.createElement('div');
+    info.className = 'item-info';
+
+    const name = document.createElement('div');
+    name.className = 'item-name';
+    const displayTitle = itemDisplayTitle(item, index);
+    name.textContent = displayTitle;
+    name.title = itemTitleTooltip(item, displayTitle);
+
+    const language = document.createElement('span');
+    language.className = 'lang';
+
+    if (item.language) {
+      language.textContent = item.language.name + (item.language.auto ? ' (tự động)' : '');
+      language.title = item.language.auto
+        ? `${item.language.name} · phụ đề dịch tự động`
+        : item.language.name;
+    } else if (item.prefetching || !item.languageResolved) {
+      language.classList.add('pending');
+      language.textContent = 'Đang nhận diện…';
+      language.title = 'Đang đọc nội dung file phụ đề để nhận diện ngôn ngữ';
+    } else {
+      language.classList.add('unknown');
+      language.textContent = 'Chưa rõ ngôn ngữ';
+      language.title = 'Không đọc được ngôn ngữ từ track đang chọn hoặc nội dung file';
+    }
+
+    const link = document.createElement('a');
+    link.className = 'item-sub';
+    link.href = item.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.title = `${item.url}\n(Click để mở link gốc)`;
+    link.textContent = prettyUrl(item.url);
+
+    const meta = document.createElement('div');
+    meta.className = 'item-meta';
+    meta.append(language, link);
+
+    info.append(name, meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'item-actions';
+
+    const downloadButton = document.createElement('button');
+    downloadButton.type = 'button';
+    downloadButton.className = 'mini primary';
+    downloadButton.textContent = item.downloading ? 'Đang tải…' : (item.downloaded ? 'Tải lại' : 'Tải');
+    downloadButton.disabled = !!item.downloading;
+    downloadButton.addEventListener('click', () => downloadSubtitle(item));
+
+    const copyButton = document.createElement('button');
+    copyButton.type = 'button';
+    copyButton.className = 'mini';
+    copyButton.textContent = 'Copy';
+    copyButton.addEventListener('click', async () => {
+      const ok = await copyText(item.url);
+      toast(ok ? 'Đã copy link phụ đề.' : 'Không copy được link.', 2200);
+    });
+
+    actions.append(downloadButton, copyButton);
+    row.append(info, actions);
+    return row;
+  }
+
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (_) { /* thử cách cũ */ }
+
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+      (document.body || document.documentElement).appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const ok = document.execCommand('copy');
+      textarea.remove();
+      return ok;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  Tải file
+   * ------------------------------------------------------------------ */
+
+  function gmGetBuffer(url) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest !== 'function') {
+        reject(new Error('GM_xmlhttpRequest không khả dụng'));
+        return;
+      }
+
+      try {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url,
+          responseType: 'arraybuffer',
+          timeout: 45000,
+          onload(response) {
+            if (response.status >= 200 && response.status < 300 && response.response) {
+              resolve(response.response);
+            } else {
+              reject(new Error('HTTP ' + response.status));
+            }
+          },
+          onerror() { reject(new Error('lỗi mạng')); },
+          ontimeout() { reject(new Error('hết thời gian chờ')); },
+          onabort() { reject(new Error('đã huỷ')); },
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  async function directGetBuffer(url) {
+    const response = await fetch(url, { credentials: 'omit' });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    return response.arrayBuffer();
+  }
+
+  async function getBuffer(url) {
+    let gmError = null;
+
+    if (typeof GM_xmlhttpRequest === 'function') {
+      try {
+        return await gmGetBuffer(url);
+      } catch (error) {
+        gmError = error;
+      }
+    }
+
+    try {
+      return await directGetBuffer(url);
+    } catch (error) {
+      if (gmError) {
+        throw new Error(`${gmError.message || 'lỗi tải'} / ${error.message || 'lỗi tải'}`);
+      }
+      throw error;
+    }
+  }
+
+  function saveBlob(buffer, filename) {
+    const blob = new Blob([buffer], { type: 'application/octet-stream' });
+    const objectUrl = URL.createObjectURL(blob);
+
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    anchor.style.display = 'none';
+    (document.body || document.documentElement).appendChild(anchor);
+    anchor.click();
+
+    setTimeout(() => {
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+    }, 5000);
+  }
+
+  function itemBaseName(item) {
+    refreshItemTitles(item);
+
+    const episode = stripSiteSuffix(item && item.episodeTitle ? item.episodeTitle : '');
+    const show = stripSiteSuffix(item && item.showTitle ? item.showTitle : '');
+
+    if (episode) {
+      if (show && !episode.toLowerCase().includes(show.toLowerCase())) {
+        return sanitizeFilename(`${show} - ${episode}`);
+      }
+      return sanitizeFilename(episode);
+    }
+
+    const pageTitle = stripSiteSuffix(item && item.pageTitle ? item.pageTitle : '');
+    if (pageTitle && !/^(?:优酷|優酷|youku(?:\.tv)?)$/i.test(pageTitle)) {
+      return sanitizeFilename(pageTitle);
+    }
+
+    return pageBaseName();
+  }
+
+  function buildFilename(item) {
+    const base = itemBaseName(item);
+    const index = subtitles.indexOf(item);
+    const language = item.language;
+    let suffix = '';
+
+    if (language && typeof language.fileCode === 'string') {
+      if (language.fileCode) suffix = `.${language.fileCode}`;
+
+      // Nếu có nhiều phụ đề cùng ngôn ngữ, đánh số để không ghi đè nhau.
+      if (index >= 0 && language.code) {
+        const sameLanguageBefore = subtitles
+          .slice(0, index)
+          .filter(other => other.language && other.language.code === language.code)
+          .length;
+
+        if (sameLanguageBefore) suffix += ` (${sameLanguageBefore + 1})`;
+      }
+    } else if (subtitles.length > 1 && index >= 0) {
+      suffix = ` (${index + 1})`;
+    }
+
+    const extension = /\.ssa(?:[?#]|$)/i.test(item.url) ? 'ssa' : 'ass';
+    return `${base}${suffix}.${extension}`;
+  }
+
+  async function downloadSubtitle(item, options) {
+    const opts = options || {};
+    if (!item || item.downloading) return false;
+
+    item.downloading = true;
+    if (!opts.quiet) render();
+
+    try {
+      // Chờ phần đọc ngầm hoàn tất để dùng lại buffer và biết ngôn ngữ.
+      if (!item.buffer && item.prefetchPromise) {
+        try { await item.prefetchPromise; } catch (_) { /* bỏ qua */ }
+      }
+
+      const buffer = item.buffer || await getBuffer(item.url);
+      const filename = buildFilename(item);
+      saveBlob(buffer, filename);
+      item.downloaded = true;
+      toast(`Đã lưu: ${filename}`, 4500);
+      return true;
+    } catch (error) {
+      console.warn('[Youku ASS] Không tải được phụ đề:', error);
+      toast(`Không tải được: ${error.message || 'lỗi'}. Link có thể đã hết hạn, hãy tua lại video rồi thử lại.`, 6000);
+      return false;
+    } finally {
+      item.downloading = false;
+      render();
+    }
+  }
+
+  let downloadingAll = false;
+
+  async function downloadAll() {
+    if (downloadingAll) return;
+    if (!subtitles.length) {
+      toast('Chưa có phụ đề nào để tải.', 2400);
+      return;
+    }
+
+    downloadingAll = true;
+    try {
+      for (let index = 0; index < subtitles.length; index++) {
+        await downloadSubtitle(subtitles[index]);
+        if (index < subtitles.length - 1) await sleep(700);
+      }
+    } finally {
+      downloadingAll = false;
+      render();
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  Theo dõi chuyển video (SPA) + nhận link từ iframe
+   * ------------------------------------------------------------------ */
+
+  function checkNavigation() {
+    if (!IS_TOP) return;
+    if (location.pathname === lastPath) return;
+
+    lastPath = location.pathname;
+    resetForNewVideo();
+  }
+
+  function hookHistory() {
+    if (!IS_TOP) return;
+
+    ['pushState', 'replaceState'].forEach(method => {
+      try {
+        const original = W.history[method];
+        if (typeof original !== 'function' || original.__ykAssPatched) return;
+
+        function patched(...args) {
+          const result = original.apply(this, args);
+          try { checkNavigation(); } catch (_) { /* bỏ qua */ }
+          return result;
+        }
+
+        patched.__ykAssPatched = true;
+        W.history[method] = patched;
+      } catch (_) { /* bỏ qua */ }
+    });
+
+    W.addEventListener('popstate', checkNavigation);
+    setInterval(checkNavigation, 1500);
+  }
+
+  function listenForIframeMessages() {
+    if (!IS_TOP) return;
+
+    window.addEventListener('message', event => {
+      const data = event.data;
+      if (!data || typeof data !== 'object' || typeof data.__ykAssSubtitle !== 'string') return;
+
+      const url = data.__ykAssSubtitle;
+      try {
+        const host = new URL(url, location.href).hostname;
+        if (!/(^|\.)(ykimg\.com|youku\.tv|youku\.com)$/i.test(host)) return;
+      } catch (_) {
+        return;
+      }
+
+      addSubtitle(url, 'iframe', data.__ykAssSubtitleLang);
+    });
+  }
+
+  function registerMenuCommands() {
+    if (!IS_TOP || typeof GM_registerMenuCommand !== 'function') return;
+
+    GM_registerMenuCommand('Tải tất cả phụ đề đã bắt', () => {
+      setPanelOpen(true);
+      downloadAll();
+    });
+
+    GM_registerMenuCommand('Bật/tắt tự động tải phụ đề', () => {
+      autoDownload = !autoDownload;
+      setPref('autoDownload', autoDownload);
+      if (els.auto) els.auto.checked = autoDownload;
+      toast(autoDownload ? 'Đã bật tự động tải.' : 'Đã tắt tự động tải.', 2200);
+    });
+
+    GM_registerMenuCommand('Quét lại trang', () => {
+      scanPerformanceEntries();
+      scanDocument();
+      toast('Đã quét lại trang.', 2200);
+    });
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  Khởi động
+   * ------------------------------------------------------------------ */
+
+  hookFetch();
+  hookXhr();
+  hookSubtitleLanguageMenu();
+  hookHistory();
+  listenForIframeMessages();
+  registerMenuCommands();
+
+  scanPerformanceEntries();
+
+  function boot() {
+    ensureUI();
+    render();
+
+    scanPerformanceEntries();
+    scanDocument();
+
+    setTimeout(scanDocument, 1500);
+    setTimeout(scanDocument, 4500);
+    setTimeout(scanDocument, 9000);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
+  } else {
+    boot();
+  }
+
+  setInterval(scanPerformanceEntries, 3000);
+
+})();
